@@ -288,6 +288,21 @@
 
 <script>
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PROXY CONFIG
+// Replace YOUR_WORKER_URL with your Cloudflare Worker URL after deploying.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const PROXY_URL = 'https://skinscan-proxy.kelly-f.workers.dev';
+
+// All Anthropic API calls go through the proxy — no key in the client
+function apiUrl()     { return PROXY_URL + '/v1/messages'; }
+function authHeaders() {
+  return {
+    'Content-Type':      'application/json',
+    'anthropic-version': '2023-06-01',
+  };
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // STATE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const selectedTypes = new Set(['clog-prone', 'sensitive']);
@@ -405,9 +420,9 @@ function clearPhoto() {
 // Images are pre-processed to JPEG by handlePhotoUpload (resize + compress)
 async function analyzePhoto(base64Image) {
   async function visionCall(prompt) {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch(apiUrl(), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
+      headers: authHeaders(),
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 1500,
@@ -550,9 +565,9 @@ async function searchINCIBySnippet(query) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 18000);
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch(apiUrl(), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
+      headers: authHeaders(),
       signal: controller.signal,
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
@@ -625,9 +640,9 @@ async function searchINCI(query) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 12000);
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch(apiUrl(), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
+      headers: authHeaders(),
       signal: controller.signal,
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
@@ -943,8 +958,8 @@ function verdictFromScore(s) {
 async function getAIAnalysis(productName, ingredients, verdict, skinTypes) {
   const skinList = skinTypes.join(', ') || 'general skin';
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
+    const res = await fetch(apiUrl(), {
+      method: 'POST', headers: authHeaders(),
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514', max_tokens: 1000,
         messages: [{ role: 'user', content:
@@ -1050,9 +1065,9 @@ async function googleIngredientsFallback(query) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 18000);
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch(apiUrl(), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
+      headers: authHeaders(),
       signal: controller.signal,
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
