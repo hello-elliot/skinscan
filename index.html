@@ -498,7 +498,7 @@ async function analyzePhoto(base64Image) {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 1500,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Image } },
@@ -648,7 +648,7 @@ async function searchINCIBySnippet(query) {
       headers: authHeaders(),
       signal: controller.signal,
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 2000,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         tool_choice: { type: 'any' },  // force the search to actually run
@@ -725,7 +725,7 @@ async function searchINCI(query) {
       headers: authHeaders(),
       signal: controller.signal,
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 600,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         tool_choice: { type: 'any' },
@@ -1062,7 +1062,7 @@ async function getAIAnalysis(productName, ingredients, verdict, skinTypes) {
     const res = await fetch(apiUrl(), {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514', max_tokens: 1000,
+        model: 'claude-sonnet-4-6', max_tokens: 1000,
         messages: [{ role: 'user', content:
           `You are a cosmetic chemist. Analyze for someone with ${skinList} skin.\n\nProduct: ${productName}\nIngredients: ${ingredients.slice(0,40).join(', ')}\nSafety result: ${verdict}\n\n2–3 plain sentences. Address their specific concerns (${skinList}). Name 1–2 most relevant ingredients. End with one actionable tip. Direct, no marketing.`
         }]
@@ -1174,7 +1174,7 @@ async function googleIngredientsFallback(query) {
       headers: authHeaders(),
       signal: controller.signal,
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 1500,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         tool_choice: { type: 'any' },
