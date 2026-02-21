@@ -15,10 +15,16 @@
   body { background: var(--cream); color: var(--dark); font-family: 'DM Sans', sans-serif; min-height: 100vh; }
 
   /* ── HEADER ── */
-  header { padding: 26px 24px 18px; display: flex; align-items: baseline; justify-content: space-between; border-bottom: 1.5px solid rgba(26,20,16,0.1); }
-  .logo { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 21px; letter-spacing: -0.5px; color: var(--terra); }
-  .logo-sub { font-size: 11.5px; font-weight: 300; color: rgba(26,20,16,0.4); letter-spacing: 0.08em; text-transform: uppercase; margin-left: 9px; }
-  .db-tag { font-size: 10px; color: rgba(26,20,16,0.3); background: rgba(26,20,16,0.05); border: 1px solid rgba(26,20,16,0.08); border-radius: 20px; padding: 3px 9px; }
+  header { padding: 26px 24px 18px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1.5px solid rgba(26,20,16,0.1); }
+  .logo-group { display: flex; align-items: baseline; gap: 8px; }
+  .logo { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 21px; letter-spacing: -0.5px; color: var(--terra); white-space: nowrap; }
+  .logo-sub { font-size: 11.5px; font-weight: 300; color: rgba(26,20,16,0.4); letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
+  .db-tag { font-size: 10px; color: rgba(26,20,16,0.3); background: rgba(26,20,16,0.05); border: 1px solid rgba(26,20,16,0.08); border-radius: 20px; padding: 3px 9px; white-space: nowrap; flex-shrink: 0; }
+  /* On narrow screens: stack title + subtitle vertically */
+  @media (max-width: 400px) {
+    .logo-group { flex-direction: column; gap: 2px; align-items: flex-start; }
+    .logo-sub { margin-left: 0; letter-spacing: 0.06em; }
+  }
 
   main { max-width: 500px; margin: 0 auto; padding: 26px 20px 64px; }
 
@@ -192,13 +198,13 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="SkinScan">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="theme-color" content="#1A1410">
+  <meta name="theme-color" content="#F5F0E8">
   <!-- Apple touch icon generated inline -->
-  <link id="apple-touch-icon" rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjExMiIgZmlsbD0iIzFBMTQxMCIvPjx0ZXh0IHg9IjI1NiIgeT0iMTkwIiBmb250LWZhbWlseT0ic2VyaWYiIGZvbnQtd2VpZ2h0PSI4MDAiIGZvbnQtc2l6ZT0iODgiIGZpbGw9IiNDNDYyMkQiIHRleHQtYW5jaG9yPSJtaWRkbGUiPlNraW48L3RleHQ+PHRleHQgeD0iMjU2IiB5PSIyOTAiIGZvbnQtZmFtaWx5PSJzZXJpZiIgZm9udC13ZWlnaHQ9IjgwMCIgZm9udC1zaXplPSI4OCIgZmlsbD0iI0Y1RjBFOCIgdGV4dC1hbmNob3I9Im1pZGRsZSI+U2NhbjwvdGV4dD48cmVjdCB4PSIxMjAiIHk9IjMyMCIgd2lkdGg9IjI3MiIgaGVpZ2h0PSIzIiByeD0iMiIgZmlsbD0iI0M0NjIyRCIgb3BhY2l0eT0iMC42Ii8+PC9zdmc+">
+  <link id="apple-touch-icon" rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjExMCIgZmlsbD0iI0Y1RjBFOCIvPjxwYXRoIGQ9Ik04MCA4MCBRODAgMTcwIDE2MCAxNzAgUTEyMCAxMjAgODAgODBaIiBmaWxsPSIjQzQ2MjJEIiBvcGFjaXR5PSIwLjE4Ii8+PHBhdGggZD0iTTQzMiA0MzIgUTQzMiAzNDIgMzUyIDM0MiBRMzkyIDM5MiA0MzIgNDMyWiIgZmlsbD0iI0M0NjIyRCIgb3BhY2l0eT0iMC4xOCIvPjxwYXRoIGQ9Ik0zMTAgMTQ4IEMzMTAgMTE4IDI4NiAxMDAgMjUyIDEwMCBDMjA4IDEwMCAxNzggMTI0IDE3OCAxNjQgQzE3OCAxOTYgMTk4IDIxNCAyNDAgMjI4IEwyNjggMjM4IEMzMDggMjUyIDMzMiAyNzIgMzMyIDMxMiBDMzMyIDM1OCAyOTggMzkwIDI0OCAzOTAgQzE5NiAzOTAgMTY4IDM2MiAxNjggMzMwIiBmaWxsPSJub25lIiBzdHJva2U9IiNDNDYyMkQiIHN0cm9rZS13aWR0aD0iNDQiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxyZWN0IHg9IjE2OCIgeT0iNDIwIiB3aWR0aD0iMTc2IiBoZWlnaHQ9IjgiIHJ4PSI0IiBmaWxsPSIjQzQ2MjJEIiBvcGFjaXR5PSIwLjM1Ii8+PC9zdmc+">
   <!-- Manifest injected via JS so it works from any origin including file:// -->
   <script>
     (function(){
-      const manifest = {"name": "SkinScan \u2014 Ingredient Analyzer", "short_name": "SkinScan", "description": "Analyze skincare ingredients for your skin type", "start_url": ".", "display": "standalone", "orientation": "portrait", "background_color": "#F5F0E8", "theme_color": "#1A1410", "icons": [{"src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjExMiIgZmlsbD0iIzFBMTQxMCIvPjx0ZXh0IHg9IjI1NiIgeT0iMTkwIiBmb250LWZhbWlseT0ic2VyaWYiIGZvbnQtd2VpZ2h0PSI4MDAiIGZvbnQtc2l6ZT0iODgiIGZpbGw9IiNDNDYyMkQiIHRleHQtYW5jaG9yPSJtaWRkbGUiPlNraW48L3RleHQ+PHRleHQgeD0iMjU2IiB5PSIyOTAiIGZvbnQtZmFtaWx5PSJzZXJpZiIgZm9udC13ZWlnaHQ9IjgwMCIgZm9udC1zaXplPSI4OCIgZmlsbD0iI0Y1RjBFOCIgdGV4dC1hbmNob3I9Im1pZGRsZSI+U2NhbjwvdGV4dD48cmVjdCB4PSIxMjAiIHk9IjMyMCIgd2lkdGg9IjI3MiIgaGVpZ2h0PSIzIiByeD0iMiIgZmlsbD0iI0M0NjIyRCIgb3BhY2l0eT0iMC42Ii8+PC9zdmc+", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any maskable"}, {"src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjExMiIgZmlsbD0iIzFBMTQxMCIvPjx0ZXh0IHg9IjI1NiIgeT0iMTkwIiBmb250LWZhbWlseT0ic2VyaWYiIGZvbnQtd2VpZ2h0PSI4MDAiIGZvbnQtc2l6ZT0iODgiIGZpbGw9IiNDNDYyMkQiIHRleHQtYW5jaG9yPSJtaWRkbGUiPlNraW48L3RleHQ+PHRleHQgeD0iMjU2IiB5PSIyOTAiIGZvbnQtZmFtaWx5PSJzZXJpZiIgZm9udC13ZWlnaHQ9IjgwMCIgZm9udC1zaXplPSI4OCIgZmlsbD0iI0Y1RjBFOCIgdGV4dC1hbmNob3I9Im1pZGRsZSI+U2NhbjwvdGV4dD48cmVjdCB4PSIxMjAiIHk9IjMyMCIgd2lkdGg9IjI3MiIgaGVpZ2h0PSIzIiByeD0iMiIgZmlsbD0iI0M0NjIyRCIgb3BhY2l0eT0iMC42Ii8+PC9zdmc+", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable"}]};
+      const manifest = {"name": "SkinScan \u2014 Ingredient Analyzer", "short_name": "SkinScan", "description": "Analyze skincare ingredients for your skin type", "start_url": ".", "display": "standalone", "orientation": "portrait", "background_color": "#F5F0E8", "theme_color": "#F5F0E8", "icons": [{"src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjExMCIgZmlsbD0iI0Y1RjBFOCIvPjxwYXRoIGQ9Ik04MCA4MCBRODAgMTcwIDE2MCAxNzAgUTEyMCAxMjAgODAgODBaIiBmaWxsPSIjQzQ2MjJEIiBvcGFjaXR5PSIwLjE4Ii8+PHBhdGggZD0iTTQzMiA0MzIgUTQzMiAzNDIgMzUyIDM0MiBRMzkyIDM5MiA0MzIgNDMyWiIgZmlsbD0iI0M0NjIyRCIgb3BhY2l0eT0iMC4xOCIvPjxwYXRoIGQ9Ik0zMTAgMTQ4IEMzMTAgMTE4IDI4NiAxMDAgMjUyIDEwMCBDMjA4IDEwMCAxNzggMTI0IDE3OCAxNjQgQzE3OCAxOTYgMTk4IDIxNCAyNDAgMjI4IEwyNjggMjM4IEMzMDggMjUyIDMzMiAyNzIgMzMyIDMxMiBDMzMyIDM1OCAyOTggMzkwIDI0OCAzOTAgQzE5NiAzOTAgMTY4IDM2MiAxNjggMzMwIiBmaWxsPSJub25lIiBzdHJva2U9IiNDNDYyMkQiIHN0cm9rZS13aWR0aD0iNDQiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxyZWN0IHg9IjE2OCIgeT0iNDIwIiB3aWR0aD0iMTc2IiBoZWlnaHQ9IjgiIHJ4PSI0IiBmaWxsPSIjQzQ2MjJEIiBvcGFjaXR5PSIwLjM1Ii8+PC9zdmc+", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any maskable"}, {"src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjExMCIgZmlsbD0iI0Y1RjBFOCIvPjxwYXRoIGQ9Ik04MCA4MCBRODAgMTcwIDE2MCAxNzAgUTEyMCAxMjAgODAgODBaIiBmaWxsPSIjQzQ2MjJEIiBvcGFjaXR5PSIwLjE4Ii8+PHBhdGggZD0iTTQzMiA0MzIgUTQzMiAzNDIgMzUyIDM0MiBRMzkyIDM5MiA0MzIgNDMyWiIgZmlsbD0iI0M0NjIyRCIgb3BhY2l0eT0iMC4xOCIvPjxwYXRoIGQ9Ik0zMTAgMTQ4IEMzMTAgMTE4IDI4NiAxMDAgMjUyIDEwMCBDMjA4IDEwMCAxNzggMTI0IDE3OCAxNjQgQzE3OCAxOTYgMTk4IDIxNCAyNDAgMjI4IEwyNjggMjM4IEMzMDggMjUyIDMzMiAyNzIgMzMyIDMxMiBDMzMyIDM1OCAyOTggMzkwIDI0OCAzOTAgQzE5NiAzOTAgMTY4IDM2MiAxNjggMzMwIiBmaWxsPSJub25lIiBzdHJva2U9IiNDNDYyMkQiIHN0cm9rZS13aWR0aD0iNDQiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxyZWN0IHg9IjE2OCIgeT0iNDIwIiB3aWR0aD0iMTc2IiBoZWlnaHQ9IjgiIHJ4PSI0IiBmaWxsPSIjQzQ2MjJEIiBvcGFjaXR5PSIwLjM1Ii8+PC9zdmc+", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable"}]};
       const blob = new Blob([JSON.stringify(manifest)], {type:'application/manifest+json'});
       const url  = URL.createObjectURL(blob);
       const link = document.createElement('link');
@@ -211,7 +217,7 @@
 <body>
 
 <header>
-  <div>
+  <div class="logo-group">
     <span class="logo">SkinScan</span>
     <span class="logo-sub">Ingredient Analyzer</span>
   </div>
@@ -350,22 +356,46 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
 function handlePhotoUpload(event) {
   const file = event.target.files[0];
   if (!file) return;
+
+  // Resize + convert to JPEG via canvas (handles HEIC, PNG, WebP, large photos)
+  const img = new Image();
   const reader = new FileReader();
   reader.onload = (e) => {
-    const dataUrl = e.target.result;
-    capturedPhotoBase64 = dataUrl.split(',')[1];  // strip data:image/...;base64,
-    // Show preview
-    const img = document.getElementById('photoImg');
-    img.src = dataUrl;
-    document.getElementById('photoPreview').style.display = 'block';
-    document.getElementById('photoBtn').classList.add('photo-active');
-    // Clear text input and selected product since photo takes priority
-    productInput.value = '';
-    selectedProduct = null;
-    hideSuggestions();
+    img.onload = () => {
+      // Resize to max 1400px on longest side (enough for text OCR, small enough for API)
+      const MAX = 1400;
+      let w = img.width, h = img.height;
+      if (w > MAX || h > MAX) {
+        if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+        else       { w = Math.round(w * MAX / h); h = MAX; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      // Export as JPEG (works universally, ~80% quality keeps text sharp)
+      const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.82);
+      capturedPhotoBase64 = jpegDataUrl.split(',')[1];
+
+      // Show preview
+      document.getElementById('photoImg').src = jpegDataUrl;
+      document.getElementById('photoPreview').style.display = 'block';
+      document.getElementById('photoBtn').classList.add('photo-active');
+      productInput.value = '';
+      selectedProduct = null;
+      hideSuggestions();
+    };
+    img.onerror = () => {
+      // Fallback: send raw if canvas fails (shouldn't happen)
+      const dataUrl = e.target.result;
+      capturedPhotoBase64 = dataUrl.split(',')[1];
+      document.getElementById('photoImg').src = dataUrl;
+      document.getElementById('photoPreview').style.display = 'block';
+      document.getElementById('photoBtn').classList.add('photo-active');
+    };
+    img.src = e.target.result;
   };
   reader.readAsDataURL(file);
-  // Reset file input so same photo can be re-selected if needed
   event.target.value = '';
 }
 function clearPhoto() {
@@ -375,55 +405,56 @@ function clearPhoto() {
   document.getElementById('photoBtn').classList.remove('photo-active');
 }
 
-// ── analyzePhoto: send image to Claude Vision, extract + analyze ingredients ──
+// ── analyzePhoto: send image to Claude Vision, extract ingredients ──
+// Images are pre-processed to JPEG by handlePhotoUpload (resize + compress)
 async function analyzePhoto(base64Image) {
-  const skinTypes = [...selectedTypes];
-  const skinList  = skinTypes.join(', ') || 'general skin';
-  try {
+  async function visionCall(prompt) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 1200,
-        messages: [{
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: { type: 'base64', media_type: 'image/jpeg', data: base64Image }
-            },
-            {
-              type: 'text',
-              text:
-                'This is a photo of a cosmetic product ingredient label.\n\n' +
-                'Step 1: Read all the ingredient names from the label. They are usually listed after the word "Ingredients:" and separated by commas.\n' +
-                'Step 2: Return the data in exactly this format (three lines, nothing else):\n' +
-                'PRODUCT: <product name if visible, otherwise "Unknown Product">\n' +
-                'BRAND: <brand name if visible, otherwise "">\n' +
-                'INGREDIENTS: <all ingredients comma-separated, exactly as written on the label>\n\n' +
-                'If the ingredient list is not legible or not present in the image, respond with:\n' +
-                'ERROR: <brief explanation>'
-            }
-          ]
-        }]
+        max_tokens: 1500,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Image } },
+          { type: 'text', text: prompt }
+        ]}]
       })
     });
     const data = await res.json();
-    if (data.error) return { error: data.error.message };
-    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
-    if (text.startsWith('ERROR:')) return { error: text.replace('ERROR:', '').trim() };
-    const productMatch = text.match(/PRODUCT:\s*(.+)/i);
-    const brandMatch   = text.match(/BRAND:\s*(.+)/i);
-    const ingMatch     = text.match(/INGREDIENTS:\s*([\s\S]+)/i);
-    if (!ingMatch) return { error: 'Could not read ingredient list from image.' };
-    return {
-      productName: productMatch ? productMatch[1].trim() : 'Unknown Product',
-      brand:       brandMatch   ? brandMatch[1].trim()   : '',
-      ingredients: ingMatch[1].trim(),
-    };
+    if (data.error) throw new Error(data.error.message);
+    return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  }
+
+  try {
+    const prompt1 = 'Look at this photo of a cosmetic product. Find the ingredient list (small text on the back/side, starting with "Ingredients:" or "INGREDIENTS:"). Read every ingredient name separated by commas. Reply with ONLY these three lines — no extra text:\nPRODUCT: [product name or Unknown Product]\nBRAND: [brand or blank]\nINGREDIENTS: [full comma-separated ingredient list]\nIf no ingredient list is visible, reply: NOT_FOUND';
+
+    const text1 = await visionCall(prompt1);
+
+    if (!text1.includes('NOT_FOUND') && text1.includes('INGREDIENTS:')) {
+      const pm = text1.match(/PRODUCT:\s*(.+)/i);
+      const bm = text1.match(/BRAND:\s*(.+)/i);
+      const im = text1.match(/INGREDIENTS:\s*([\s\S]+)/i);
+      if (im && im[1].trim().length > 10) {
+        return { productName: pm ? pm[1].trim() : 'Unknown Product', brand: bm ? bm[1].trim() : '', ingredients: im[1].trim().split('\n')[0] };
+      }
+    }
+
+    // Retry with a broader prompt
+    const prompt2 = 'This is a cosmetic product packaging photo. Please read ALL visible text and find any ingredient names (chemical/botanical names separated by commas). Start your reply with "INGREDIENTS:" then list them comma-separated on one line. If you see a product name, add PRODUCT: [name] on the next line.';
+    const text2 = await visionCall(prompt2);
+
+    const pm2 = text2.match(/PRODUCT:\s*(.+)/i);
+    const bm2 = text2.match(/BRAND:\s*(.+)/i);
+    const im2 = text2.match(/INGREDIENTS:\s*([\s\S]+)/i);
+    if (im2 && im2[1].trim().length > 10) {
+      return { productName: pm2 ? pm2[1].trim() : 'Unknown Product', brand: bm2 ? bm2[1].trim() : '', ingredients: im2[1].trim().split('\n')[0] };
+    }
+
+    return { error: "Couldn't read the ingredient list clearly. Try a closer shot with the label flat, good lighting, and text in focus." };
   } catch(e) {
-    return { error: e.message };
+    console.error('analyzePhoto error:', e);
+    return { error: 'Connection error. Check your internet and try again.' };
   }
 }
 
