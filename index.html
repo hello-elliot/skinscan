@@ -234,7 +234,7 @@
   <div id="inputSection">
     <div class="section-label">What product?</div>
     <div class="source-tabs">
-      <button class="source-tab active" id="tabBoth" onclick="setSource('both')">🔍 Both databases</button>
+      <button class="source-tab active" id="tabBoth" onclick="setSource('both')">Both databases</button>
       <button class="source-tab"        id="tabObf"  onclick="setSource('obf')">Open Beauty Facts</button>
       <button class="source-tab"        id="tabInci" onclick="setSource('inci')">INCIDecoder</button>
     </div>
@@ -264,11 +264,11 @@
     <div id="photoPreview" style="display:none;margin:8px 0 10px;position:relative">
       <img id="photoImg" style="width:100%;border-radius:10px;max-height:150px;object-fit:cover;border:1.5px solid rgba(196,98,45,0.25)" alt="Ingredient photo">
       <button onclick="clearPhoto()" style="position:absolute;top:7px;right:7px;background:rgba(20,14,10,0.55);border:none;color:white;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:14px;line-height:24px;text-align:center;backdrop-filter:blur(4px)">×</button>
-      <div style="position:absolute;bottom:7px;left:9px;background:rgba(20,14,10,0.55);color:white;font-size:10.5px;padding:3px 8px;border-radius:20px;backdrop-filter:blur(4px)">📷 Tap Analyze to scan this label</div>
+      <div style="position:absolute;bottom:7px;left:9px;background:rgba(20,14,10,0.55);color:white;font-size:10.5px;padding:3px 8px;border-radius:20px;backdrop-filter:blur(4px)">Tap Analyze to scan this label</div>
     </div>
 
     <div class="suggestions" id="suggestions"></div>
-    <p class="hint" id="searchHint">Tap 📷 to photograph a label · Tap 🎤 to dictate · or paste ingredients</p>
+    <p class="hint" id="searchHint">Photograph a label · Dictate · or paste ingredients</p>
 
     <button class="analyze-btn" onclick="doScan()">Analyze Ingredients →</button>
   </div>
@@ -302,6 +302,13 @@ function authHeaders() {
   };
 }
 
+// ── Search results cache: avoids redundant API calls for repeated queries ──
+// Keyed by normalised query string. Entries never expire (session-scoped).
+const _searchCache = {};
+function cacheKey(prefix, q) { return prefix + ':' + q.toLowerCase().trim().replace(/\s+/g,' '); }
+function cacheGet(prefix, q) { return _searchCache[cacheKey(prefix, q)] || null; }
+function cacheSet(prefix, q, val) { if (val) _searchCache[cacheKey(prefix, q)] = val; }
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // STATE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -323,9 +330,9 @@ document.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () =
 // SOURCE TABS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const hintTexts = {
-  both: 'Searches both Open Beauty Facts &amp; INCIDecoder. Tap 🎤 to dictate.',
-  obf:  'Searches Open Beauty Facts only. Tap 🎤 to dictate.',
-  inci: 'Searches INCIDecoder — great for niche &amp; K-beauty. Tap 🎤 to dictate.',
+  both: 'Searches both Open Beauty Facts &amp; INCIDecoder. Tap the mic to dictate.',
+  obf:  'Searches Open Beauty Facts only. Tap the mic to dictate.',
+  inci: 'Searches INCIDecoder — great for niche &amp; K-beauty. Tap the mic to dictate.',
 };
 function setSource(src) {
   activeSource = src;
@@ -340,26 +347,93 @@ function setSource(src) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const micBtn = document.getElementById('micBtn');
 let recognition = null, isRecording = false;
+
 if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  recognition = new SR();
-  recognition.continuous = false; recognition.interimResults = true; recognition.lang = 'en-US';
-  recognition.onresult = e => {
-    let interim = '', final = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (e.results[i].isFinal) final += e.results[i][0].transcript;
-      else interim += e.results[i][0].transcript;
-    }
-    productInput.value = final || interim;
-    if (final) triggerSuggest(final);
-  };
-  recognition.onend = () => { isRecording = false; micBtn.classList.remove('recording'); };
-  recognition.onerror = () => { isRecording = false; micBtn.classList.remove('recording'); };
+
+  // ── iOS Safari notes ──────────────────────────────────────────────
+  // • interimResults:true causes iOS to never fire isFinal=true — keep false
+  // • iOS auto-stops after ~6s silence; onend fires before onresult sometimes
+  // • We track the best transcript ourselves and commit it in onend
+  // ─────────────────────────────────────────────────────────────────
+  let pendingTranscript = '';   // best transcript seen so far this session
+
+  function buildRecognition() {
+    const r = new SR();
+    r.continuous      = false;
+    r.interimResults  = false;  // iOS: true breaks final delivery
+    r.lang            = 'en-US';
+    r.maxAlternatives = 1;
+
+    r.onstart = () => {
+      pendingTranscript = '';
+      productInput.placeholder = 'Listening…';
+    };
+
+    r.onresult = e => {
+      // Collect ALL results (not just from resultIndex) so nothing is missed
+      let transcript = '';
+      for (let i = 0; i < e.results.length; i++) {
+        transcript += e.results[i][0].transcript;
+      }
+      pendingTranscript = transcript.trim();
+      productInput.value = pendingTranscript;
+    };
+
+    r.onspeechend = () => {
+      // Speech finished — stop cleanly (iOS sometimes needs this nudge)
+      try { r.stop(); } catch (_) {}
+    };
+
+    r.onend = () => {
+      isRecording = false;
+      micBtn.classList.remove('recording');
+      productInput.placeholder = 'Type a product name, or paste the ingredient list…';
+
+      // Commit whatever transcript we have (covers iOS where onresult fires late or not at all)
+      if (pendingTranscript) {
+        productInput.value = pendingTranscript;
+        triggerSuggest(pendingTranscript);
+      }
+      // Rebuild for next use (iOS reuses of the same instance are unreliable)
+      recognition = buildRecognition();
+    };
+
+    r.onerror = e => {
+      isRecording = false;
+      micBtn.classList.remove('recording');
+      productInput.placeholder = 'Type a product name, or paste the ingredient list…';
+      if (e.error !== 'no-speech' && e.error !== 'aborted') {
+        console.warn('Speech recognition error:', e.error);
+      }
+      recognition = buildRecognition();
+    };
+
+    return r;
+  }
+
+  recognition = buildRecognition();
+
   micBtn.addEventListener('click', () => {
-    if (isRecording) recognition.stop();
-    else { isRecording = true; micBtn.classList.add('recording'); recognition.start(); }
+    if (isRecording) {
+      try { recognition.stop(); } catch (_) {}
+    } else {
+      isRecording = true;
+      micBtn.classList.add('recording');
+      try { recognition.start(); }
+      catch (err) {
+        // Already started or not allowed — reset
+        isRecording = false;
+        micBtn.classList.remove('recording');
+        recognition = buildRecognition();
+      }
+    }
   });
-} else { micBtn.style.opacity = '0.3'; }
+
+} else {
+  micBtn.style.opacity = '0.3';
+  micBtn.title = 'Speech recognition not supported on this browser';
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // PHOTO / CAMERA MODE
@@ -562,8 +636,12 @@ function getCachedSlug(q) {
 // full ingredient lists in their snippets — instead of asking Claude to
 // generate formatted output. Much more reliable.
 async function searchINCIBySnippet(query) {
+  // Return cached result immediately — avoids duplicate API calls
+  const cached = cacheGet('inci', query);
+  if (cached) { console.log('searchINCIBySnippet: cache hit for', query); return cached; }
+
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 18000);
+  const timer = setTimeout(() => controller.abort(), 22000);  // slightly longer for cold Workers
   try {
     const res = await fetch(apiUrl(), {
       method: 'POST',
@@ -613,11 +691,13 @@ async function searchINCIBySnippet(query) {
       return null;
     }
 
-    return {
+    const result = {
       productName: productMatch ? productMatch[1].trim() : query,
       brand:       brandMatch   ? brandMatch[1].trim()   : '',
-      ingredients: ingredientsMatch[1].trim().replace(/\n[\s\S]*/,''), // stop at first newline after ingredients
+      ingredients: ingredientsMatch[1].trim().replace(/\n[\s\S]*/,''),
     };
+    cacheSet('inci', query, result);
+    return result;
   } catch(e) {
     clearTimeout(timer);
     console.error('searchINCIBySnippet error:', e.message);
@@ -697,7 +777,7 @@ function showSuggestions(products) {
   suggestionsEl._products = products;
   suggestionsEl.innerHTML = products.map((p,i) => `
     <div class="sug-item" onclick="pickProduct(${i})">
-      ${p.img ? `<img class="sug-thumb" src="${escHtml(p.img)}" alt="" onerror="this.style.display='none'">` : `<div class="sug-thumb-empty">${p.source==='inci'?'🌿':'✦'}</div>`}
+      ${p.img ? `<img class="sug-thumb" src="${escHtml(p.img)}" alt="" onerror="this.style.display='none'">` : `<div class="sug-thumb-empty">${p.source==='inci'?'◆':'◇'}</div>`}
       <div class="sug-info">
         <div class="sug-name">${escHtml(p.name)}</div>
         ${p.brand?`<div class="sug-brand">${escHtml(p.brand)}</div>`:''}
@@ -883,6 +963,27 @@ const ALLERGENS = [
   ["methylisothiazolinone"],
   ["imidazolidinyl urea"],["dmdm hydantoin"],
 ];
+const ECZEMA_TRIGGERS = [
+  ["fragrance","parfum"],
+  ["sodium lauryl sulfate","sls "],
+  ["sodium laureth sulfate","sles"],
+  ["methylisothiazolinone","methylchloroisothiazolinone","mit "],
+  ["imidazolidinyl urea"],["dmdm hydantoin"],["quaternium-15"],
+  ["formaldehyde"],
+  ["propylene glycol"],
+  ["cocamidopropyl betaine"],
+  ["lanolin","wool wax"],
+  ["neomycin"],["bacitracin"],
+  ["benzalkonium chloride"],
+  ["ethylhexylglycerin"],
+  ["iodopropynyl butylcarbamate"],
+  ["methylparaben"],["propylparaben"],["butylparaben"],
+  ["phenoxyethanol"],
+  ["alcohol denat","denatured alcohol","sd alcohol"],
+  ["menthol"],["camphor"],["eucalyptus"],
+  ["citral"],["limonene"],["linalool"],["geraniol"],["eugenol"],
+];
+
 
 // ── parseIngredients: handle long INCI names (raise length limit) ──
 function parseIngredients(text) {
@@ -992,7 +1093,7 @@ async function doScan() {
       document.getElementById('inputSection').style.display = '';
       document.getElementById('results').innerHTML = `
         <div class="not-found">
-          <div class="not-found-title">📷 Couldn't read the label</div>
+          <div class="not-found-title">Couldn't read the label</div>
           <div class="not-found-desc">${escHtml(photoResult.error)}<br><br>Try retaking the photo with better lighting, held flat and close to the text.</div>
         </div>
         <button class="new-scan" onclick="resetScan()">← Try Again</button>`;
@@ -1062,8 +1163,11 @@ async function doScan() {
 
 // ── googleIngredientsFallback: last-resort Google search for any product ──
 async function googleIngredientsFallback(query) {
+  const cached = cacheGet('google', query);
+  if (cached) return cached;
+
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 18000);
+  const timer = setTimeout(() => controller.abort(), 22000);
   try {
     const res = await fetch(apiUrl(), {
       method: 'POST',
@@ -1093,11 +1197,13 @@ async function googleIngredientsFallback(query) {
     const brandMatch   = text.match(/BRAND:\s*(.+)/i);
     const ingMatch     = text.match(/INGREDIENTS:\s*([\s\S]+)/i);
     if (!ingMatch || ingMatch[1].trim().length < 20) return null;
-    return {
+    const result = {
       productName: productMatch ? productMatch[1].trim() : query,
       brand:       brandMatch   ? brandMatch[1].trim()   : '',
-      ingredients: ingMatch[1].trim().split('\n')[0], // first line only
+      ingredients: ingMatch[1].trim().split('\n')[0],
     };
+    cacheSet('google', query, result);
+    return result;
   } catch(e) {
     clearTimeout(timer);
     return null;
@@ -1119,44 +1225,44 @@ async function runAnalysis(productName, brand, ingredientsText, source) {
 
   if (selectedTypes.has('clog-prone') || selectedTypes.has('oily')) {
     const f = checkComedogenic(ingredients);
-    cats.push({ key:'comedo', icon:'⬤', name:'Pore-clogging', desc: f.length===0 ? 'No comedogenic ingredients found.' : null,
+    cats.push({ key:'comedo', icon:'●', name:'Pore-clogging', desc: f.length===0 ? 'No comedogenic ingredients found.' : null,
       flagged: f.map(x=>({name:x.name, severity: x.score>=4?'high':'mid'})),
       score: comedoScore(f), weight: 1.5 });
   }
   if (selectedTypes.has('oily')) {
     const f = checkList(ingredients, OILY_HEAVY);
-    cats.push({ key:'oily', icon:'💧', name:'Heavy / occlusive', desc: f.length===0 ? 'No heavy waxes or butters detected.' : null,
+    cats.push({ key:'oily', icon:'○', name:'Heavy / occlusive', desc: f.length===0 ? 'No heavy waxes or butters detected.' : null,
       flagged: f.map(n=>({name:n, severity:'mid'})),
       score: scoreCategory(f.length), weight: 0.8 });
   }
   if (selectedTypes.has('dry')) {
     const f = checkList(ingredients, DRY_HARMFUL);
-    cats.push({ key:'dry', icon:'🌵', name:'Drying / stripping', desc: f.length===0 ? 'No harsh drying agents detected.' : null,
+    cats.push({ key:'dry', icon:'−', name:'Drying / stripping', desc: f.length===0 ? 'No harsh drying agents detected.' : null,
       flagged: f.map(n=>({name:n, severity: f.length>1?'high':'mid'})),
       score: scoreCategory(f.length, f.length>1?1:0), weight: 1.2 });
   }
   if (selectedTypes.has('sensitive')) {
     const f = checkList(ingredients, IRRITANTS);
-    cats.push({ key:'irrit', icon:'⚡', name:'Irritants', desc: f.length===0 ? 'No common irritants detected.' : null,
+    cats.push({ key:'irrit', icon:'△', name:'Irritants', desc: f.length===0 ? 'No common irritants detected.' : null,
       flagged: f.map(n=>({name:n, severity: n.toLowerCase().includes('fragrance')||n.toLowerCase().includes('alcohol denat')?'high':'mid'})),
       score: scoreCategory(f.length, f.filter(n=>n.toLowerCase().includes('fragrance')).length), weight: 1.3 });
   }
   if (selectedTypes.has('rosacea')) {
     const f = checkList(ingredients, ROSACEA_TRIGGERS);
-    cats.push({ key:'rosa', icon:'🌹', name:'Rosacea triggers', desc: f.length===0 ? 'No rosacea triggers found.' : null,
+    cats.push({ key:'rosa', icon:'◇', name:'Rosacea triggers', desc: f.length===0 ? 'No rosacea triggers found.' : null,
       flagged: f.map(n=>({name:n, severity:'mid'})),
       score: scoreCategory(f.length, 0), weight: 1.4 });
   }
   if (selectedTypes.has('eczema')) {
-    const f = checkList(ingredients, IRRITANTS);
-    cats.push({ key:'eczema', icon:'🍃', name:'Eczema irritants', desc: f.length===0 ? 'No eczema irritants detected.' : null,
-      flagged: f.map(n=>({name:n, severity:'mid'})),
-      score: scoreCategory(f.length, 0), weight: 1.3 });
+    const f = checkList(ingredients, ECZEMA_TRIGGERS);
+    cats.push({ key:'eczema', icon:'◈', name:'Eczema triggers', desc: f.length===0 ? 'No common eczema triggers detected.' : null,
+      flagged: f.map(n=>({name:n, severity: n.toLowerCase().includes('fragrance')||n.toLowerCase().includes('sls')?'high':'mid'})),
+      score: scoreCategory(f.length, f.filter(n=>n.toLowerCase().includes('fragrance')||n.toLowerCase().includes('sls')).length), weight: 1.4 });
   }
 
   // Allergens — always
   const allergens = checkList(ingredients, ALLERGENS);
-  cats.push({ key:'allergen', icon:'⚠', name:'EU allergens', desc: allergens.length===0 ? 'No EU-listed allergens detected.' : null,
+  cats.push({ key:'allergen', icon:'▲', name:'EU allergens', desc: allergens.length===0 ? 'No EU-listed allergens detected.' : null,
     flagged: allergens.map(n=>({name:n, severity: allergens.length>1?'high':'mid'})),
     score: scoreCategory(allergens.length, allergens.length>1?1:0), weight: 1.0 });
 
@@ -1179,7 +1285,7 @@ function showNotFound(name) {
   document.getElementById('loading').classList.remove('show');
   document.getElementById('results').innerHTML = `
     <div class="not-found">
-      <div class="not-found-title">🔍 Product not found</div>
+      <div class="not-found-title">Product not found</div>
       <div class="not-found-desc">
         "${escHtml(name)}" wasn't found. A few options:
       </div>
