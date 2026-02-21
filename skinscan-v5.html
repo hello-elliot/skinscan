@@ -1,0 +1,1285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SkinScan — Ingredient Analyzer</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Sans:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --cream: #F5F0E8; --dark: #1A1410; --terra: #C4622D;
+    --blush: #E8C4A0; --warn: #E8A030; --bad: #C4462A; --good: #4A8C5C;
+    --mid: #D4834A;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--cream); color: var(--dark); font-family: 'DM Sans', sans-serif; min-height: 100vh; }
+
+  /* ── HEADER ── */
+  header { padding: 26px 24px 18px; display: flex; align-items: baseline; justify-content: space-between; border-bottom: 1.5px solid rgba(26,20,16,0.1); }
+  .logo { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 21px; letter-spacing: -0.5px; color: var(--terra); }
+  .logo-sub { font-size: 11.5px; font-weight: 300; color: rgba(26,20,16,0.4); letter-spacing: 0.08em; text-transform: uppercase; margin-left: 9px; }
+  .db-tag { font-size: 10px; color: rgba(26,20,16,0.3); background: rgba(26,20,16,0.05); border: 1px solid rgba(26,20,16,0.08); border-radius: 20px; padding: 3px 9px; }
+
+  main { max-width: 500px; margin: 0 auto; padding: 26px 20px 64px; }
+
+  /* ── SECTION LABEL ── */
+  .section-label { font-family: 'Syne', sans-serif; font-size: 10.5px; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase; color: rgba(26,20,16,0.35); margin-bottom: 10px; }
+
+  /* ── SKIN CHIPS ── */
+  .skin-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 26px; }
+  .chip { padding: 7px 15px; border-radius: 50px; border: 1.5px solid rgba(26,20,16,0.18); font-size: 13px; cursor: pointer; background: transparent; color: var(--dark); transition: all 0.15s; -webkit-tap-highlight-color: transparent; }
+  .chip:hover { border-color: var(--terra); color: var(--terra); }
+  .chip.active { background: var(--terra); border-color: var(--terra); color: white; }
+
+  /* ── SOURCE TABS ── */
+  .source-tabs { display: flex; gap: 5px; margin-bottom: 11px; }
+  .source-tab { flex: 1; padding: 8px 8px; border-radius: 9px; border: 1.5px solid rgba(26,20,16,0.13); background: transparent; font-family: 'DM Sans', sans-serif; font-size: 12px; color: rgba(26,20,16,0.4); cursor: pointer; transition: all 0.15s; text-align: center; -webkit-tap-highlight-color: transparent; }
+  .source-tab:hover { border-color: var(--terra); color: var(--terra); }
+  .source-tab.active { background: var(--terra); border-color: var(--terra); color: white; font-weight: 500; }
+
+  /* ── INPUT ── */
+  .input-wrapper { position: relative; margin-bottom: 6px; }
+
+  textarea:focus { border-color: var(--terra); }
+  textarea::placeholder { color: rgba(26,20,16,0.28); }
+  /* Both icon buttons share the same pill — mic on right, camera left of it */
+  .input-icons { position: absolute; right: 9px; top: 9px; display: flex; gap: 5px; }
+  .icon-btn { width: 33px; height: 33px; border-radius: 50%; border: none; background: var(--blush); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.2s, transform 0.15s; -webkit-tap-highlight-color: transparent; flex-shrink: 0; }
+  .icon-btn:hover { background: var(--terra); transform: scale(1.08); }
+  .icon-btn:hover svg * { stroke: white; }
+  .icon-btn.recording { background: var(--bad); animation: pulse 1s infinite; }
+  .icon-btn.recording svg * { stroke: white; }
+  .icon-btn.photo-active { background: var(--terra); }
+  .icon-btn.photo-active svg * { stroke: white; }
+  @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.08)} }
+  /* Widen textarea right padding to make room for two icons */
+  textarea { width: 100%; min-height: 86px; background: white; border: 1.5px solid rgba(26,20,16,0.13); border-radius: 13px; padding: 13px 84px 13px 15px; font-family: 'DM Sans', sans-serif; font-size: 14px; line-height: 1.6; color: var(--dark); resize: none; outline: none; transition: border-color 0.2s; }
+
+  /* ── SUGGESTIONS ── */
+  .suggestions { display: none; background: white; border: 1.5px solid rgba(26,20,16,0.1); border-radius: 11px; overflow: hidden; margin-bottom: 10px; box-shadow: 0 4px 18px rgba(26,20,16,0.07); }
+  .suggestions.show { display: block; }
+  .sug-item { display: flex; align-items: center; gap: 11px; padding: 10px 13px; cursor: pointer; border-bottom: 1px solid rgba(26,20,16,0.06); transition: background 0.1s; }
+  .sug-item:last-child { border-bottom: none; }
+  .sug-item:hover { background: rgba(196,98,45,0.04); }
+  .sug-thumb { width: 32px; height: 32px; border-radius: 7px; object-fit: contain; background: rgba(26,20,16,0.05); flex-shrink: 0; }
+  .sug-thumb-empty { width: 32px; height: 32px; border-radius: 7px; background: rgba(26,20,16,0.05); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+  .sug-info { flex: 1; min-width: 0; }
+  .sug-name { font-size: 13px; color: var(--dark); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sug-brand { font-size: 11px; color: rgba(26,20,16,0.38); margin-top: 1px; }
+  .sug-badge { font-size: 9px; padding: 2px 6px; border-radius: 4px; font-weight: 700; letter-spacing: 0.04em; flex-shrink: 0; text-transform: uppercase; }
+  .sug-badge.obf  { background: #EBF5EC; color: var(--good); }
+  .sug-badge.inci { background: rgba(196,98,45,0.1); color: var(--terra); }
+
+  .hint { font-size: 11.5px; color: rgba(26,20,16,0.35); margin-bottom: 15px; line-height: 1.5; }
+
+  .analyze-btn { width: 100%; padding: 15px; background: var(--dark); color: white; border: none; border-radius: 13px; font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14.5px; letter-spacing: 0.04em; cursor: pointer; transition: background 0.2s, transform 0.1s; -webkit-tap-highlight-color: transparent; }
+  .analyze-btn:hover { background: var(--terra); }
+  .analyze-btn:active { transform: scale(0.985); }
+
+  /* ── LOADING ── */
+  .loading { display: none; text-align: center; padding: 48px 0; }
+  .loading.show { display: block; }
+  .spinner { width: 34px; height: 34px; border: 2.5px solid var(--blush); border-top-color: var(--terra); border-radius: 50%; animation: spin 0.75s linear infinite; margin: 0 auto 13px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-main { font-size: 13px; color: rgba(26,20,16,0.4); font-style: italic; }
+  .loading-sub  { font-size: 11px; color: rgba(26,20,16,0.25); margin-top: 4px; }
+
+  /* ══════════════════════════════════════
+     RESULTS
+  ══════════════════════════════════════ */
+  .results { display: none; }
+  .results.show { display: block; }
+
+  /* ── Product header ── */
+  .r-brand { font-size: 11px; color: var(--terra); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 3px; }
+  .r-name  { font-family: 'Syne', sans-serif; font-size: 20px; font-weight: 800; line-height: 1.15; margin-bottom: 4px; }
+  .r-meta  { font-size: 11.5px; color: rgba(26,20,16,0.35); margin-bottom: 20px; }
+
+  /* ── Verdict banner — one tinted strip, nothing else ── */
+  .verdict-banner { border-radius: 12px; padding: 16px 18px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .verdict-banner.safe    { background: #E8F3E9; }
+  .verdict-banner.caution { background: #FDF3E3; }
+  .verdict-banner.avoid   { background: #FAEAE7; }
+  .verdict-left { display: flex; align-items: center; gap: 11px; }
+  .verdict-icon { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; font-weight: 700; }
+  .safe    .verdict-icon { background: var(--good);   color: white; }
+  .caution .verdict-icon { background: var(--warn);   color: white; }
+  .avoid   .verdict-icon { background: var(--bad);    color: white; }
+  .verdict-text-title { font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; }
+  .safe    .verdict-text-title { color: var(--good); }
+  .caution .verdict-text-title { color: #B07000; }
+  .avoid   .verdict-text-title { color: var(--bad);  }
+  .verdict-text-desc { font-size: 12px; color: rgba(26,20,16,0.5); margin-top: 1px; }
+  .verdict-score { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; letter-spacing: -0.5px; line-height: 1; }
+  .verdict-score-denom { font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 400; color: rgba(26,20,16,0.3); }
+  .safe    .verdict-score { color: var(--good); }
+  .caution .verdict-score { color: var(--warn); }
+  .avoid   .verdict-score { color: var(--bad);  }
+
+  /* Skin context — very quiet, below verdict */
+  .r-skin-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 22px; margin-top: 8px; }
+  .r-skin-label { font-size: 11px; color: rgba(26,20,16,0.3); align-self: center; }
+  .r-skin-pill  { font-size: 11px; padding: 2px 8px; border-radius: 20px; background: rgba(196,98,45,0.07); color: rgba(196,98,45,0.8); border: 1px solid rgba(196,98,45,0.15); }
+
+  /* ── Category rows — single white card, separated by hairlines ── */
+  .cats { background: white; border-radius: 13px; margin-bottom: 18px; overflow: hidden; }
+  .cat-row { padding: 13px 16px; border-bottom: 1px solid rgba(26,20,16,0.06); }
+  .cat-row:last-child { border-bottom: none; }
+
+  /* Top line: name left, score-num right */
+  .cat-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
+  .cat-name { font-size: 13px; font-weight: 500; color: var(--dark); }
+  .cat-num  { font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 700; }
+  .cat-num.c0, .cat-num.c1, .cat-num.c2 { color: var(--good); }
+  .cat-num.c3 { color: var(--warn); }
+  .cat-num.c4 { color: var(--mid);  }
+  .cat-num.c5 { color: var(--bad);  }
+
+  /* Bar — this IS the score, full width, no dots */
+  .cat-bar-track { height: 4px; background: rgba(26,20,16,0.07); border-radius: 2px; overflow: hidden; margin-bottom: 6px; }
+  .cat-bar-fill  { height: 100%; border-radius: 2px; transition: width 0.5s cubic-bezier(.4,0,.2,1); }
+  .cat-bar-fill.c0, .cat-bar-fill.c1, .cat-bar-fill.c2 { background: var(--good); }
+  .cat-bar-fill.c3 { background: var(--warn); }
+  .cat-bar-fill.c4 { background: var(--mid);  }
+  .cat-bar-fill.c5 { background: var(--bad);  }
+
+  /* Flagged ingredients — plain list, no colored pills */
+  .cat-flagged { font-size: 12px; color: rgba(26,20,16,0.5); line-height: 1.6; }
+  .cat-flagged strong { color: var(--dark); font-weight: 500; }
+  .cat-ok { font-size: 12px; color: rgba(26,20,16,0.35); font-style: italic; }
+
+  /* ── AI block — minimal, no border-top accent ── */
+  .ai-block { background: white; border-radius: 12px; padding: 16px 18px; margin-bottom: 18px; }
+
+  .ai-label { font-family: 'Syne', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase; color: rgba(26,20,16,0.35); margin-bottom: 9px; }
+  .ai-text  { font-size: 13px; color: rgba(26,20,16,0.62); line-height: 1.7; }
+  .ai-dots  { display: flex; align-items: center; gap: 5px; }
+  .ai-dot   { width: 4px; height: 4px; border-radius: 50%; background: var(--terra); animation: blink 1.1s infinite; }
+  .ai-dot:nth-child(2) { animation-delay: 0.18s; }
+  .ai-dot:nth-child(3) { animation-delay: 0.36s; }
+  @keyframes blink { 0%,100%{opacity:0.2} 50%{opacity:1} }
+
+  /* ── Not found ── */
+  .not-found { background: #FDF3E3; border-radius: 12px; padding: 18px 18px; margin-bottom: 18px; }
+  .not-found-title { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px; color: #9A6500; margin-bottom: 5px; }
+  .not-found-desc  { font-size: 13px; color: rgba(26,20,16,0.55); line-height: 1.55; }
+
+  /* ── Reset button ── */
+  .new-scan { width: 100%; padding: 13px; background: transparent; color: rgba(26,20,16,0.35); border: 1.5px solid rgba(26,20,16,0.12); border-radius: 12px; font-family: 'DM Sans', sans-serif; font-size: 14px; cursor: pointer; transition: all 0.18s; }
+  .attribution { text-align: center; font-size: 11px; color: rgba(26,20,16,0.22); margin-top: 28px; }
+  .attribution a { color: rgba(26,20,16,0.3); text-decoration: none; }
+  .attribution a:hover { color: var(--terra); }
+
+
+  /* ── Mobile / touch refinements ── */
+  @media (max-width: 500px) {
+    main { padding: 20px 16px 80px; }
+    header { padding: 18px 16px 14px; }
+    .analyze-btn { padding: 17px; font-size: 15px; }
+    /* Bigger tap targets on mobile */
+    .icon-btn { width: 38px; height: 38px; }
+    textarea { padding: 13px 94px 13px 14px; font-size: 15px; }
+    .chip { padding: 8px 16px; font-size: 13.5px; }
+  }
+  /* Prevent iOS bounce / overscroll on the app shell */
+  html { height: 100%; overflow-y: scroll; -webkit-overflow-scrolling: touch; }
+  /* Remove blue tap highlight globally on mobile */
+  * { -webkit-tap-highlight-color: transparent; }
+</style>
+
+  <!-- PWA: Apple touch icon & meta (iOS) -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="SkinScan">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#1A1410">
+  <!-- Apple touch icon generated inline -->
+  <link id="apple-touch-icon" rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjExMiIgZmlsbD0iIzFBMTQxMCIvPjx0ZXh0IHg9IjI1NiIgeT0iMTkwIiBmb250LWZhbWlseT0ic2VyaWYiIGZvbnQtd2VpZ2h0PSI4MDAiIGZvbnQtc2l6ZT0iODgiIGZpbGw9IiNDNDYyMkQiIHRleHQtYW5jaG9yPSJtaWRkbGUiPlNraW48L3RleHQ+PHRleHQgeD0iMjU2IiB5PSIyOTAiIGZvbnQtZmFtaWx5PSJzZXJpZiIgZm9udC13ZWlnaHQ9IjgwMCIgZm9udC1zaXplPSI4OCIgZmlsbD0iI0Y1RjBFOCIgdGV4dC1hbmNob3I9Im1pZGRsZSI+U2NhbjwvdGV4dD48cmVjdCB4PSIxMjAiIHk9IjMyMCIgd2lkdGg9IjI3MiIgaGVpZ2h0PSIzIiByeD0iMiIgZmlsbD0iI0M0NjIyRCIgb3BhY2l0eT0iMC42Ii8+PC9zdmc+">
+  <!-- Manifest injected via JS so it works from any origin including file:// -->
+  <script>
+    (function(){
+      const manifest = {"name": "SkinScan \u2014 Ingredient Analyzer", "short_name": "SkinScan", "description": "Analyze skincare ingredients for your skin type", "start_url": ".", "display": "standalone", "orientation": "portrait", "background_color": "#F5F0E8", "theme_color": "#1A1410", "icons": [{"src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjExMiIgZmlsbD0iIzFBMTQxMCIvPjx0ZXh0IHg9IjI1NiIgeT0iMTkwIiBmb250LWZhbWlseT0ic2VyaWYiIGZvbnQtd2VpZ2h0PSI4MDAiIGZvbnQtc2l6ZT0iODgiIGZpbGw9IiNDNDYyMkQiIHRleHQtYW5jaG9yPSJtaWRkbGUiPlNraW48L3RleHQ+PHRleHQgeD0iMjU2IiB5PSIyOTAiIGZvbnQtZmFtaWx5PSJzZXJpZiIgZm9udC13ZWlnaHQ9IjgwMCIgZm9udC1zaXplPSI4OCIgZmlsbD0iI0Y1RjBFOCIgdGV4dC1hbmNob3I9Im1pZGRsZSI+U2NhbjwvdGV4dD48cmVjdCB4PSIxMjAiIHk9IjMyMCIgd2lkdGg9IjI3MiIgaGVpZ2h0PSIzIiByeD0iMiIgZmlsbD0iI0M0NjIyRCIgb3BhY2l0eT0iMC42Ii8+PC9zdmc+", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any maskable"}, {"src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjExMiIgZmlsbD0iIzFBMTQxMCIvPjx0ZXh0IHg9IjI1NiIgeT0iMTkwIiBmb250LWZhbWlseT0ic2VyaWYiIGZvbnQtd2VpZ2h0PSI4MDAiIGZvbnQtc2l6ZT0iODgiIGZpbGw9IiNDNDYyMkQiIHRleHQtYW5jaG9yPSJtaWRkbGUiPlNraW48L3RleHQ+PHRleHQgeD0iMjU2IiB5PSIyOTAiIGZvbnQtZmFtaWx5PSJzZXJpZiIgZm9udC13ZWlnaHQ9IjgwMCIgZm9udC1zaXplPSI4OCIgZmlsbD0iI0Y1RjBFOCIgdGV4dC1hbmNob3I9Im1pZGRsZSI+U2NhbjwvdGV4dD48cmVjdCB4PSIxMjAiIHk9IjMyMCIgd2lkdGg9IjI3MiIgaGVpZ2h0PSIzIiByeD0iMiIgZmlsbD0iI0M0NjIyRCIgb3BhY2l0eT0iMC42Ii8+PC9zdmc+", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable"}]};
+      const blob = new Blob([JSON.stringify(manifest)], {type:'application/manifest+json'});
+      const url  = URL.createObjectURL(blob);
+      const link = document.createElement('link');
+      link.rel   = 'manifest';
+      link.href  = url;
+      document.head.appendChild(link);
+    })();
+  </script>
+</head>
+<body>
+
+<header>
+  <div>
+    <span class="logo">SkinScan</span>
+    <span class="logo-sub">Ingredient Analyzer</span>
+  </div>
+  <span class="db-tag">OBF + INCIDecoder</span>
+</header>
+
+<main>
+  <div class="section-label">My skin is</div>
+  <div class="skin-chips" id="skinChips">
+    <button class="chip active" data-type="clog-prone">Clog-prone</button>
+    <button class="chip active" data-type="sensitive">Sensitive</button>
+    <button class="chip" data-type="dry">Dry</button>
+    <button class="chip" data-type="oily">Oily</button>
+    <button class="chip" data-type="rosacea">Rosacea</button>
+    <button class="chip" data-type="eczema">Eczema</button>
+  </div>
+
+  <div id="inputSection">
+    <div class="section-label">What product?</div>
+    <div class="source-tabs">
+      <button class="source-tab active" id="tabBoth" onclick="setSource('both')">🔍 Both databases</button>
+      <button class="source-tab"        id="tabObf"  onclick="setSource('obf')">Open Beauty Facts</button>
+      <button class="source-tab"        id="tabInci" onclick="setSource('inci')">INCIDecoder</button>
+    </div>
+    <div class="input-wrapper">
+      <textarea id="productInput" placeholder="Type a product name, or paste the ingredient list…" rows="3"></textarea>
+      <div class="input-icons">
+        <!-- Camera: opens device camera or file picker -->
+        <button class="icon-btn" id="photoBtn" title="Scan ingredient label" onclick="document.getElementById('cameraInput').click()">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <path d="M5.5 2L4.5 3.5H2C1.45 3.5 1 3.95 1 4.5V12.5C1 13.05 1.45 13.5 2 13.5H14C14.55 13.5 15 13.05 15 12.5V4.5C15 3.95 14.55 3.5 14 3.5H11.5L10.5 2H5.5Z" stroke="#C4622D" stroke-width="1.3" stroke-linejoin="round"/>
+            <circle cx="8" cy="8.5" r="2.5" stroke="#C4622D" stroke-width="1.3"/>
+          </svg>
+        </button>
+        <!-- Mic: voice dictation -->
+        <button class="icon-btn" id="micBtn" title="Dictate product name">
+          <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+            <rect x="4.5" y="0.75" width="6" height="8" rx="3" stroke="#C4622D" stroke-width="1.3"/>
+            <path d="M2.5 7C2.5 9.761 4.739 12 7.5 12C10.261 12 12.5 9.761 12.5 7" stroke="#C4622D" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="7.5" y1="12" x2="7.5" y2="14.5" stroke="#C4622D" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none" onchange="handlePhotoUpload(event)">
+
+    <!-- Photo preview (shown after capture) -->
+    <div id="photoPreview" style="display:none;margin:8px 0 10px;position:relative">
+      <img id="photoImg" style="width:100%;border-radius:10px;max-height:150px;object-fit:cover;border:1.5px solid rgba(196,98,45,0.25)" alt="Ingredient photo">
+      <button onclick="clearPhoto()" style="position:absolute;top:7px;right:7px;background:rgba(20,14,10,0.55);border:none;color:white;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:14px;line-height:24px;text-align:center;backdrop-filter:blur(4px)">×</button>
+      <div style="position:absolute;bottom:7px;left:9px;background:rgba(20,14,10,0.55);color:white;font-size:10.5px;padding:3px 8px;border-radius:20px;backdrop-filter:blur(4px)">📷 Tap Analyze to scan this label</div>
+    </div>
+
+    <div class="suggestions" id="suggestions"></div>
+    <p class="hint" id="searchHint">Tap 📷 to photograph a label · Tap 🎤 to dictate · or paste ingredients</p>
+
+    <button class="analyze-btn" onclick="doScan()">Analyze Ingredients →</button>
+  </div>
+
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <p class="loading-main" id="loadingMain">Searching…</p>
+    <p class="loading-sub"  id="loadingSub"></p>
+  </div>
+
+  <div class="results" id="results"></div>
+
+  <div class="attribution">
+    <a href="https://world.openbeautyfacts.org" target="_blank">Open Beauty Facts</a> &amp; <a href="https://incidecoder.com" target="_blank">INCIDecoder</a> · Photo analysis by Claude Vision
+  </div>
+</main>
+
+<script>
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// STATE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const selectedTypes = new Set(['clog-prone', 'sensitive']);
+let activeSource = 'both';
+let selectedProduct = null;
+let capturedPhotoBase64 = null;   // base64 image data from camera
+const productInput = document.getElementById('productInput');
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CHIPS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+document.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
+  const t = c.dataset.type;
+  selectedTypes.has(t) ? (selectedTypes.delete(t), c.classList.remove('active')) : (selectedTypes.add(t), c.classList.add('active'));
+}));
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SOURCE TABS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const hintTexts = {
+  both: 'Searches both Open Beauty Facts &amp; INCIDecoder. Tap 🎤 to dictate.',
+  obf:  'Searches Open Beauty Facts only. Tap 🎤 to dictate.',
+  inci: 'Searches INCIDecoder — great for niche &amp; K-beauty. Tap 🎤 to dictate.',
+};
+function setSource(src) {
+  activeSource = src;
+  document.querySelectorAll('.source-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab' + src.charAt(0).toUpperCase() + src.slice(1)).classList.add('active');
+  document.getElementById('searchHint').innerHTML = hintTexts[src];
+  hideSuggestions(); selectedProduct = null;
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// VOICE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const micBtn = document.getElementById('micBtn');
+let recognition = null, isRecording = false;
+if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SR();
+  recognition.continuous = false; recognition.interimResults = true; recognition.lang = 'en-US';
+  recognition.onresult = e => {
+    let interim = '', final = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) final += e.results[i][0].transcript;
+      else interim += e.results[i][0].transcript;
+    }
+    productInput.value = final || interim;
+    if (final) triggerSuggest(final);
+  };
+  recognition.onend = () => { isRecording = false; micBtn.classList.remove('recording'); };
+  recognition.onerror = () => { isRecording = false; micBtn.classList.remove('recording'); };
+  micBtn.addEventListener('click', () => {
+    if (isRecording) recognition.stop();
+    else { isRecording = true; micBtn.classList.add('recording'); recognition.start(); }
+  });
+} else { micBtn.style.opacity = '0.3'; }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PHOTO / CAMERA MODE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function handlePhotoUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const dataUrl = e.target.result;
+    capturedPhotoBase64 = dataUrl.split(',')[1];  // strip data:image/...;base64,
+    // Show preview
+    const img = document.getElementById('photoImg');
+    img.src = dataUrl;
+    document.getElementById('photoPreview').style.display = 'block';
+    document.getElementById('photoBtn').classList.add('photo-active');
+    // Clear text input and selected product since photo takes priority
+    productInput.value = '';
+    selectedProduct = null;
+    hideSuggestions();
+  };
+  reader.readAsDataURL(file);
+  // Reset file input so same photo can be re-selected if needed
+  event.target.value = '';
+}
+function clearPhoto() {
+  capturedPhotoBase64 = null;
+  document.getElementById('photoPreview').style.display = 'none';
+  document.getElementById('photoImg').src = '';
+  document.getElementById('photoBtn').classList.remove('photo-active');
+}
+
+// ── analyzePhoto: send image to Claude Vision, extract + analyze ingredients ──
+async function analyzePhoto(base64Image) {
+  const skinTypes = [...selectedTypes];
+  const skinList  = skinTypes.join(', ') || 'general skin';
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1200,
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: 'image/jpeg', data: base64Image }
+            },
+            {
+              type: 'text',
+              text:
+                'This is a photo of a cosmetic product ingredient label.\n\n' +
+                'Step 1: Read all the ingredient names from the label. They are usually listed after the word "Ingredients:" and separated by commas.\n' +
+                'Step 2: Return the data in exactly this format (three lines, nothing else):\n' +
+                'PRODUCT: <product name if visible, otherwise "Unknown Product">\n' +
+                'BRAND: <brand name if visible, otherwise "">\n' +
+                'INGREDIENTS: <all ingredients comma-separated, exactly as written on the label>\n\n' +
+                'If the ingredient list is not legible or not present in the image, respond with:\n' +
+                'ERROR: <brief explanation>'
+            }
+          ]
+        }]
+      })
+    });
+    const data = await res.json();
+    if (data.error) return { error: data.error.message };
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+    if (text.startsWith('ERROR:')) return { error: text.replace('ERROR:', '').trim() };
+    const productMatch = text.match(/PRODUCT:\s*(.+)/i);
+    const brandMatch   = text.match(/BRAND:\s*(.+)/i);
+    const ingMatch     = text.match(/INGREDIENTS:\s*([\s\S]+)/i);
+    if (!ingMatch) return { error: 'Could not read ingredient list from image.' };
+    return {
+      productName: productMatch ? productMatch[1].trim() : 'Unknown Product',
+      brand:       brandMatch   ? brandMatch[1].trim()   : '',
+      ingredients: ingMatch[1].trim(),
+    };
+  } catch(e) {
+    return { error: e.message };
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SUGGESTIONS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const suggestionsEl = document.getElementById('suggestions');
+let searchTimeout = null;
+productInput.addEventListener('input', () => {
+  const val = productInput.value.trim();
+  selectedProduct = null;
+  clearTimeout(searchTimeout);
+  if (val.length >= 3 && !val.includes(',') && val.length < 80)
+    searchTimeout = setTimeout(() => triggerSuggest(val), 400);
+  else hideSuggestions();
+});
+// Enter key = analyze (Shift+Enter = newline)
+productInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    clearTimeout(searchTimeout);
+    hideSuggestions();
+    doScan();
+  }
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('#productInput') && !e.target.closest('#suggestions')) hideSuggestions();
+});
+function hideSuggestions() {
+  suggestionsEl.classList.remove('show');
+  suggestionsEl.innerHTML = '';
+  suggestionsEl._products = [];
+}
+async function triggerSuggest(query) {
+  const searches = [];
+  if (activeSource !== 'inci') searches.push(searchOBF(query));
+  if (activeSource !== 'obf')  searches.push(searchINCI(query));
+  const settled = await Promise.allSettled(searches);
+  let results = [];
+  settled.forEach(r => { if (r.status === 'fulfilled' && r.value) results.push(...r.value); });
+  const seen = new Set();
+  results = results.filter(p => { const k = p.name.toLowerCase().slice(0,40); if (seen.has(k)) return false; seen.add(k); return true; });
+  results.length ? showSuggestions(results.slice(0, 7)) : hideSuggestions();
+}
+async function searchOBF(query) {
+  try {
+    const url = `https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=6&fields=product_name,brands,ingredients_text,image_small_url`;
+    const res = await fetch(url, { headers: { 'User-Agent': 'SkinScan/1.0 (skinscan@example.com)' } });
+    const data = await res.json();
+    return (data.products || [])
+      .filter(p => p.product_name && p.ingredients_text?.length > 20)
+      .map(p => ({ name: p.product_name, brand: p.brands || '', ingredientsText: p.ingredients_text, img: p.image_small_url || '', source: 'obf' }));
+  } catch(e) { return []; }
+}
+// ── Popular product slug cache — instant, zero API calls ──
+const SLUG_CACHE = {
+  'drunk elephant peptide cream':    'drunk-elephant-protini-tm-polypeptide-cream',
+  'drunk elephant protini':          'drunk-elephant-protini-tm-polypeptide-cream',
+  'protini polypeptide':             'drunk-elephant-protini-tm-polypeptide-cream',
+  'drunk elephant lala':             'drunk-elephant-lala-retro-whipped-cream',
+  'drunk elephant retinol':          'drunk-elephant-a-passioni-retinol-cream',
+  'drunk elephant vitamin c':        'drunk-elephant-c-firma-fresh-day-serum',
+  'cerave moisturizing cream':       'cerave-moisturizing-cream',
+  'cerave hydrating cleanser':       'cerave-hydrating-facial-cleanser',
+  'cerave facial moisturizing':      'cerave-facial-moisturizing-lotion-am',
+  'la roche posay toleriane':        'la-roche-posay-toleriane-double-repair-face-moisturizer',
+  'la roche posay cicaplast':        'la-roche-posay-cicaplast-baume-b5',
+  'la roche posay effaclar':         'la-roche-posay-effaclar-duo',
+  'the ordinary niacinamide':        'the-ordinary-niacinamide-10-zinc-1',
+  'the ordinary hyaluronic acid':    'the-ordinary-hyaluronic-acid-2-b5',
+  'the ordinary retinol':            'the-ordinary-retinol-0-2-in-squalane',
+  'neutrogena hydro boost':          'neutrogena-hydro-boost-water-gel',
+  'paula choice bha':                'paula-s-choice-skin-perfecting-2-bha-liquid-exfoliant',
+  'paula choice aha':                'paula-s-choice-skin-perfecting-8-aha-gel',
+  'tatcha water cream':              'tatcha-the-water-cream',
+  'tatcha dewy skin':                'tatcha-the-dewy-skin-cream',
+  'glow recipe watermelon':          'glow-recipe-watermelon-glow-sleeping-mask',
+  'glossier moisturizer':            'glossier-priming-moisturizer',
+  'sunday riley good genes':         'sunday-riley-good-genes-all-in-one-lactic-acid-treatment',
+  'skinceuticals ce ferulic':        'skinceuticals-c-e-ferulic',
+  'clinique dramatically different': 'clinique-dramatically-different-moisturizing-lotion',
+};
+function getCachedSlug(q) {
+  q = q.toLowerCase();
+  for (const [key, slug] of Object.entries(SLUG_CACHE)) {
+    if (q.includes(key)) return slug;
+  }
+  return null;
+}
+
+// ── searchINCIBySnippet ──
+// Does ONE web_search call with tool_choice:any so it reliably fires.
+// Reads the raw search result content blocks (tool_result) — which contain
+// full ingredient lists in their snippets — instead of asking Claude to
+// generate formatted output. Much more reliable.
+async function searchINCIBySnippet(query) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 18000);
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 2000,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        tool_choice: { type: 'any' },  // force the search to actually run
+        messages: [{ role: 'user', content:
+          'Search for: site:incidecoder.com/products ' + query.replace(/"/g, '') +
+          '\n\nFrom the search results, find the best matching product and extract its full ingredient list.' +
+          '\nThe ingredient list appears in the search snippet after "ingredients explained:"' +
+          '\n\nRespond with exactly these three lines, nothing else:' +
+          '\nPRODUCT: <full product name>' +
+          '\nBRAND: <brand name>' +
+          '\nINGREDIENTS: <full comma-separated ingredient list from the snippet>'
+        }],
+      }),
+    });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (data.error) { console.error('API error:', data.error); return null; }
+
+    // Collect all text from the response (including after tool use)
+    const allText = (data.content || [])
+      .filter(b => b.type === 'text')
+      .map(b => b.text)
+      .join('\n');
+
+    // Also check tool_result blocks for raw snippet data as fallback
+    const toolResults = (data.content || [])
+      .filter(b => b.type === 'tool_result')
+      .map(b => typeof b.content === 'string' ? b.content : JSON.stringify(b.content))
+      .join('\n');
+
+    const fullText = allText || toolResults;
+    if (!fullText) return null;
+
+    const productMatch     = fullText.match(/PRODUCT:\s*(.+)/i);
+    const brandMatch       = fullText.match(/BRAND:\s*(.+)/i);
+    const ingredientsMatch = fullText.match(/INGREDIENTS:\s*([\s\S]+)/i);
+
+    if (!ingredientsMatch || ingredientsMatch[1].trim().length < 20) {
+      console.warn('searchINCIBySnippet: no ingredient line found. Response was:', fullText.slice(0, 300));
+      return null;
+    }
+
+    return {
+      productName: productMatch ? productMatch[1].trim() : query,
+      brand:       brandMatch   ? brandMatch[1].trim()   : '',
+      ingredients: ingredientsMatch[1].trim().replace(/\n[\s\S]*/,''), // stop at first newline after ingredients
+    };
+  } catch(e) {
+    clearTimeout(timer);
+    console.error('searchINCIBySnippet error:', e.message);
+    return null;
+  }
+}
+
+// ── searchINCI: for the dropdown suggestions ──
+// Returns name+slug only (no ingredients yet — fetched on demand)
+async function searchINCI(query) {
+  // Cache hit → instant, no API needed
+  const cachedSlug = getCachedSlug(query);
+  if (cachedSlug) {
+    const name = cachedSlug.split('-')
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+      .replace(/\bTm\b/, '™');
+    return [{ name, brand: '', ingredientsText: '', img: '', source: 'inci', slug: cachedSlug }];
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 600,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        tool_choice: { type: 'any' },
+        messages: [{ role: 'user', content:
+          'Search for: site:incidecoder.com/products ' + query.replace(/"/g, '') +
+          '\n\nList up to 4 matching products from the search result URLs.' +
+          '\nEach URL is https://incidecoder.com/products/SLUG' +
+          '\nReturn ONLY a raw JSON array, no other text:' +
+          '\n[{"name":"Product Name","brand":"Brand","slug":"url-slug"}]' +
+          '\nReturn [] if no results.'
+        }],
+      }),
+    });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (data.error) return [];
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+    const clean = text.replace(/```json|```/gi, '').trim();
+    const match = clean.match(/\[[\s\S]*\]/);
+    if (!match) return [];
+    return JSON.parse(match[0])
+      .filter(p => p.slug)
+      .map(p => ({ name: p.name || p.slug, brand: p.brand || '', ingredientsText: '', img: '', source: 'inci', slug: p.slug }));
+  } catch(e) {
+    clearTimeout(timer);
+    return [];
+  }
+}
+
+// ── fetchInciIngredients ──
+// For a known slug: one search call, read ingredients from snippet.
+// For an unknown query (isQuery=true): same but also resolves the product.
+async function fetchInciIngredients(slugOrQuery, isQuery = false) {
+  // Cache shortcut
+  if (isQuery) {
+    const cachedSlug = getCachedSlug(slugOrQuery);
+    if (cachedSlug) return fetchInciIngredients(cachedSlug, false);
+  }
+
+  const searchQuery = isQuery
+    ? 'site:incidecoder.com/products ' + slugOrQuery
+    : 'site:incidecoder.com/products/' + slugOrQuery;
+
+  return searchINCIBySnippet(isQuery ? slugOrQuery : slugOrQuery.replace(/-/g, ' '));
+}
+
+
+function showSuggestions(products) {
+  suggestionsEl._products = products;
+  suggestionsEl.innerHTML = products.map((p,i) => `
+    <div class="sug-item" onclick="pickProduct(${i})">
+      ${p.img ? `<img class="sug-thumb" src="${escHtml(p.img)}" alt="" onerror="this.style.display='none'">` : `<div class="sug-thumb-empty">${p.source==='inci'?'🌿':'✦'}</div>`}
+      <div class="sug-info">
+        <div class="sug-name">${escHtml(p.name)}</div>
+        ${p.brand?`<div class="sug-brand">${escHtml(p.brand)}</div>`:''}
+      </div>
+      <span class="sug-badge ${p.source}">${p.source==='inci'?'INCIDecoder':'OBF'}</span>
+    </div>`).join('');
+  suggestionsEl.classList.add('show');
+}
+async function pickProduct(i) {
+  const p = suggestionsEl._products[i];
+  selectedProduct = {...p};
+  productInput.value = p.name + (p.brand ? ' — ' + p.brand : '');
+  hideSuggestions();
+  if (p.source==='inci' && !p.ingredientsText && p.slug) {
+    setLoading('Fetching from INCIDecoder…', p.name);
+    document.getElementById('loading').classList.add('show');
+    document.getElementById('inputSection').style.display = 'none';
+    const result = await fetchInciIngredients(p.slug);
+    document.getElementById('loading').classList.remove('show');
+    document.getElementById('inputSection').style.display = '';
+    if (result?.ingredients) {
+      selectedProduct.ingredientsText = result.ingredients;
+      selectedProduct.name = result.productName || p.name;
+      selectedProduct.brand = result.brand || p.brand;
+    }
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// INGREDIENT DATABASES
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Each entry is an array of match terms — the ingredient is flagged if ANY term
+// appears in the lowercased INCI name. This handles both common names and INCI
+// binomials (e.g. "shea butter" AND "butyrospermum parkii").
+// Score 5 = highly comedogenic, 4 = comedogenic, 3 = moderately comedogenic.
+
+const COMEDOGENIC = [
+  // ── Score 5 — highly comedogenic ──
+  { terms:["isopropyl myristate"],                        score:5 },
+  { terms:["myristyl myristate"],                         score:5 },
+  { terms:["isopropyl linoleate"],                        score:5 },
+  { terms:["octyl stearate"],                             score:5 },
+  { terms:["isocetyl stearate"],                          score:5 },
+  { terms:["sodium lauryl sulfate","sls ","sls,","sls)"], score:5 },
+  { terms:["algae extract","red algae","algae oil"],      score:5 },
+  { terms:["wheat germ oil","triticum vulgare germ"],     score:5 },
+  { terms:["polysorbate 80"],                             score:4 },
+  { terms:["steareth-2"],                                 score:4 },
+
+  // ── Score 4 — comedogenic ──
+  { terms:["coconut oil","cocos nucifera oil"],            score:4 },
+  { terms:["cocoa butter","theobroma cacao seed butter"],  score:4 },
+  { terms:["palm oil","elaeis guineensis oil"],            score:4 },
+  { terms:["flaxseed oil","linum usitatissimum seed oil"], score:4 },
+  { terms:["acetylated lanolin"],                          score:4 },
+  { terms:["isopropyl palmitate"],                         score:4 },
+  { terms:["isopropyl isostearate"],                       score:4 },
+  { terms:["octyl palmitate"],                             score:4 },
+  { terms:["ethylhexyl palmitate"],                        score:4 },
+  { terms:["myristyl propionate"],                         score:4 },
+  { terms:["lauric acid"],                                 score:4 },
+  { terms:["sulfated castor oil"],                         score:4 },
+  { terms:["myristyl lactate"],                            score:4 },
+  { terms:["carrageenan"],                                 score:4 },
+  { terms:["acetylated lanolin alcohol"],                  score:4 },
+  { terms:["pentaerythrityl tetraethylhexanoate"],         score:4 },
+  { terms:["pentaerythrityl tetrastearate"],               score:4 },
+  { terms:["cetyl ethylhexanoate"],                        score:4 },
+  { terms:["cholesterol"],                                 score:3 },
+
+  // ── Score 3 — moderately comedogenic ──
+  { terms:["shea butter","butyrospermum parkii"],                  score:3 },
+  { terms:["avocado oil","persea gratissima oil"],                  score:3 },
+  { terms:["argan oil","argania spinosa kernel oil"],               score:3 },
+  { terms:["marula oil","sclerocarya birrea seed oil"],             score:3 },
+  { terms:["jojoba oil","simmondsia chinensis seed oil"],           score:3 },
+  { terms:["castor oil","ricinus communis seed oil"],               score:3 },
+  { terms:["hydrogenated vegetable oil"],                           score:3 },
+  { terms:["hydrogenated coconut oil"],                             score:3 },
+  { terms:["hydrogenated palm"],                                    score:3 },
+  { terms:["hydrogenated poly(c6","hydrogenated poly(c10","hydrogenated polyisobutene"], score:3 },
+  { terms:["dimethicone"],                                          score:3 },
+  { terms:["cyclomethicone","cyclopentasiloxane","cyclohexasiloxane"], score:3 },
+  { terms:["polymethylsilsesquioxane"],                             score:3 },
+  { terms:["cetearyl alcohol"],                                     score:3 },
+  { terms:["cetyl alcohol"],                                        score:3 },
+  { terms:["stearyl alcohol"],                                      score:3 },
+  { terms:["behenyl alcohol"],                                      score:2 },
+  { terms:["glyceryl stearate"],                                    score:3 },
+  { terms:["glyceryl oleate"],                                      score:3 },
+  { terms:["sorbitan oleate"],                                      score:3 },
+  { terms:["sorbitan laurate"],                                     score:3 },
+  { terms:["palmitic acid"],                                        score:3 },
+  { terms:["stearic acid"],                                         score:2 },
+  { terms:["oleic acid"],                                           score:2 },
+  { terms:["myristic acid"],                                        score:3 },
+  { terms:["butyl stearate"],                                       score:3 },
+  { terms:["decyl oleate"],                                         score:3 },
+  { terms:["lanolin"],                                              score:3 },
+  { terms:["petroleum","petrolatum"],                               score:3 },
+  { terms:["linseed oil","linum usitatissimum"],                    score:3 },
+  { terms:["squalene"],                                             score:3 },
+  { terms:["microcrystalline wax"],                                 score:3 },
+  { terms:["ozokerite","ceresin"],                                  score:3 },
+  { terms:["peg-100 stearate"],                                     score:2 },
+  { terms:["steareth-20","steareth-21","steareth-100"],             score:2 },
+  { terms:["olive oil","olea europaea fruit oil"],                  score:2 },
+  { terms:["sunflower oil","helianthus annuus seed oil"],           score:2 },
+  { terms:["rosehip","rosa canina fruit oil"],                      score:2 },
+];
+
+// For OILY_HEAVY, IRRITANTS etc. we keep the array-of-terms approach too
+const OILY_HEAVY = [
+  ["petrolatum"],["mineral oil"],["paraffin"],
+  ["beeswax","cera alba"],["carnauba wax","copernicia cerifera"],
+  ["candelilla wax","euphorbia cerifera"],
+  ["shea butter","butyrospermum parkii"],
+  ["cocoa butter","theobroma cacao seed butter"],
+  ["avocado oil","persea gratissima"],
+  ["argan oil","argania spinosa"],
+  ["lanolin","wool wax"],["tallow"],["lard"],
+  ["hydrogenated vegetable oil"],["hydrogenated coconut"],
+  ["hydrogenated poly(c","hydrogenated polyisobutene"],
+  ["dimethicone"],["cyclomethicone","cyclopentasiloxane"],
+];
+
+const DRY_HARMFUL = [
+  ["alcohol denat","denatured alcohol","sd alcohol","alcohol (denat"],
+  ["isopropyl alcohol"],
+  ["salicylic acid"],["glycolic acid"],["benzoyl peroxide"],
+  ["retinoic acid","tretinoin"],
+  ["sodium lauryl sulfate","sls "],
+  ["sodium laureth sulfate","sles"],
+  ["witch hazel","hamamelis"],
+  ["acetone"],
+];
+
+const IRRITANTS = [
+  ["fragrance","parfum"],
+  ["alcohol denat","denatured alcohol","sd alcohol"],
+  ["menthol"],["peppermint","mentha"],
+  ["eucalyptus"],["camphor"],["tea tree","melaleuca"],
+  ["lemon","citrus limon"],["lime","citrus aurantifolia"],
+  ["grapefruit","citrus paradisi"],
+  ["bergamot","citrus bergamia"],
+  ["cinnamon","cinnamomum"],["clove","eugenia caryophyllus"],
+  ["ylang ylang","cananga odorata"],
+  ["lavender oil","lavandula angustifolia oil"],
+  ["sodium lauryl sulfate"],
+  ["glycolic acid"],["lactic acid"],
+  ["benzoyl peroxide"],["resorcinol"],
+  ["methylisothiazolinone","methylchloroisothiazolinone"],
+  ["phenoxyethanol"],
+  ["isopropyl alcohol"],
+  ["chlorhexidine"],
+];
+
+const ROSACEA_TRIGGERS = [
+  ["fragrance","parfum"],
+  ["alcohol denat","denatured alcohol","sd alcohol"],
+  ["menthol"],["peppermint","mentha"],["eucalyptus"],["camphor"],
+  ["cinnamon","cinnamomum"],["clove","eugenia"],
+  ["lemon","citrus limon"],["citrus"],
+  ["witch hazel","hamamelis"],
+  ["glycolic acid"],["lactic acid"],["salicylic acid"],
+  ["benzoyl peroxide"],
+  ["retinol","retinoic acid","tretinoin"],
+  ["sodium lauryl sulfate"],
+  ["methylisothiazolinone"],
+  ["benzyl alcohol"],
+];
+
+const ALLERGENS = [
+  ["fragrance","parfum"],
+  ["cinnamal"],["eugenol"],["geraniol"],["hydroxycitronellal"],
+  ["isoeugenol"],["benzyl salicylate"],["cinnamyl alcohol"],
+  ["citral"],["coumarin"],["farnesol"],["hexyl cinnamal"],
+  ["lilial","butylphenyl methylpropional"],["limonene"],["linalool"],
+  ["methyl heptine carbonate"],["oak moss","evernia prunastri"],
+  ["tree moss","evernia furfuracea"],
+  ["alpha isomethyl ionone"],
+  ["methylparaben"],["propylparaben"],["butylparaben"],["ethylparaben"],
+  ["methylisothiazolinone"],
+  ["imidazolidinyl urea"],["dmdm hydantoin"],
+];
+
+// ── parseIngredients: handle long INCI names (raise length limit) ──
+function parseIngredients(text) {
+  return text.replace(/\*/g,'').split(/,|;|\n/)
+    .map(i => i.trim().replace(/^\s*[-·•]\s*/,''))
+    .filter(i => i.length > 2 && i.length < 120);  // was 80, INCI names can be long
+}
+
+// ── checkList: match any term in any entry against ingredient ──
+function checkList(ings, list) {
+  const out = [];
+  for (const ing of ings) {
+    const k = ing.toLowerCase();
+    for (const entry of list) {
+      const terms = Array.isArray(entry) ? entry : [entry];
+      if (terms.some(t => k.includes(t)) && !out.includes(ing)) {
+        out.push(ing);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+// ── checkComedogenic: use new array-of-objects DB ──
+function checkComedogenic(ings) {
+  const out = [];
+  for (const ing of ings) {
+    const k = ing.toLowerCase();
+    for (const entry of COMEDOGENIC) {
+      if (entry.score >= 2 && entry.terms.some(t => k.includes(t)) && !out.find(f => f.name === ing)) {
+        out.push({ name: ing, score: entry.score });
+        break;
+      }
+    }
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SCORING — each category scored 0–5
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Scale: 0 flagged → 0, 1 → 1–2, 2 → 2–3, 3+ → 4–5
+// High-severity ingredients push the score up faster
+function scoreCategory(flaggedCount, highSeverityCount = 0) {
+  let s = 0;
+  if (flaggedCount === 0) return 0;
+  s = Math.min(flaggedCount, 3) + Math.min(highSeverityCount, 2);
+  return Math.min(Math.round(s), 5);
+}
+function comedoScore(flagged) {
+  if (!flagged.length) return 0;
+  const high = flagged.filter(f => f.score >= 4).length;
+  const mid  = flagged.filter(f => f.score === 3).length;
+  return Math.min(Math.round(high * 1.8 + mid * 0.8), 5);
+}
+function overallScore(cats) {
+  if (!cats.length) return 0;
+  // Weighted average, weight by importance
+  const weighted = cats.reduce((sum, c) => sum + c.score * c.weight, 0);
+  const totalW   = cats.reduce((sum, c) => sum + c.weight, 0);
+  return Math.min(parseFloat((weighted / totalW).toFixed(1)), 5);
+}
+function verdictFromScore(s) {
+  if (s <= 1.2) return 'safe';
+  if (s <= 2.8) return 'caution';
+  return 'avoid';
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// AI ANALYSIS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async function getAIAnalysis(productName, ingredients, verdict, skinTypes) {
+  const skinList = skinTypes.join(', ') || 'general skin';
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514', max_tokens: 1000,
+        messages: [{ role: 'user', content:
+          `You are a cosmetic chemist. Analyze for someone with ${skinList} skin.\n\nProduct: ${productName}\nIngredients: ${ingredients.slice(0,40).join(', ')}\nSafety result: ${verdict}\n\n2–3 plain sentences. Address their specific concerns (${skinList}). Name 1–2 most relevant ingredients. End with one actionable tip. Direct, no marketing.`
+        }]
+      })
+    });
+    const data = await res.json();
+    return data.content?.[0]?.text || null;
+  } catch(e) { return null; }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MAIN SCAN
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async function doScan() {
+  const inputVal = productInput.value.trim();
+
+  // ── Path A: Photo mode ──
+  if (capturedPhotoBase64) {
+    hideSuggestions();
+    document.getElementById('inputSection').style.display = 'none';
+    document.getElementById('loading').classList.add('show');
+    document.getElementById('results').classList.remove('show');
+    document.getElementById('results').innerHTML = '';
+    setLoading('Reading ingredient label…', 'Claude Vision is scanning the photo');
+    const photoResult = await analyzePhoto(capturedPhotoBase64);
+    if (photoResult.error) {
+      document.getElementById('loading').classList.remove('show');
+      document.getElementById('inputSection').style.display = '';
+      document.getElementById('results').innerHTML = `
+        <div class="not-found">
+          <div class="not-found-title">📷 Couldn't read the label</div>
+          <div class="not-found-desc">${escHtml(photoResult.error)}<br><br>Try retaking the photo with better lighting, held flat and close to the text.</div>
+        </div>
+        <button class="new-scan" onclick="resetScan()">← Try Again</button>`;
+      document.getElementById('results').classList.add('show');
+      return;
+    }
+    // Hand off to analysis with photo-sourced data
+    await runAnalysis(photoResult.productName, photoResult.brand, photoResult.ingredients, 'Photo');
+    return;
+  }
+
+  if (!inputVal) { productInput.style.borderColor='var(--bad)'; setTimeout(()=>productInput.style.borderColor='',900); productInput.focus(); return; }
+
+  hideSuggestions();
+  document.getElementById('inputSection').style.display = 'none';
+  document.getElementById('loading').classList.add('show');
+  document.getElementById('results').classList.remove('show');
+  document.getElementById('results').innerHTML = '';
+
+  let productName='', brand='', ingredientsText='', source='';
+
+  if (selectedProduct?.ingredientsText) {
+    ({ name: productName, brand: brand = '', ingredientsText, source: source } = selectedProduct);
+    source = source === 'inci' ? 'INCIDecoder' : 'Open Beauty Facts';
+  } else if (selectedProduct?.source === 'inci' && selectedProduct?.slug) {
+    setLoading('Fetching from INCIDecoder…','');
+    const r = await fetchInciIngredients(selectedProduct.slug);
+    if (r?.ingredients) { productName=r.productName||selectedProduct.name; brand=r.brand||selectedProduct.brand||''; ingredientsText=r.ingredients; source='INCIDecoder'; }
+    else productName = selectedProduct.name;
+  } else if (inputVal.includes(',') && inputVal.length > 60) {
+    // Pasted ingredient list — use directly
+    productName='Custom Product'; ingredientsText=inputVal; source='Pasted';
+  } else {
+    let found = false;
+    // Step 1: Open Beauty Facts (fast, reliable API)
+    if (activeSource !== 'inci') {
+      setLoading('Searching Open Beauty Facts…','');
+      try {
+        const url=`https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(inputVal)}&search_simple=1&action=process&json=1&page_size=10&fields=product_name,brands,ingredients_text,image_small_url`;
+        const res=await fetch(url,{headers:{'User-Agent':'SkinScan/1.0 (skinscan@example.com)'}});
+        const data=await res.json();
+        const prods=(data.products||[]).filter(p=>p.ingredients_text?.length>20);
+        if (prods.length) { const p=prods[0]; productName=p.product_name||inputVal; brand=p.brands||''; ingredientsText=p.ingredients_text; source='Open Beauty Facts'; found=true; }
+      } catch(e){}
+    }
+    // Step 2: INCIDecoder via search snippet
+    if (!found && activeSource !== 'obf') {
+      setLoading('Searching INCIDecoder…', '');
+      const r = await fetchInciIngredients(inputVal, true);
+      if (r?.ingredients) {
+        productName=r.productName||inputVal; brand=r.brand||''; ingredientsText=r.ingredients; source='INCIDecoder'; found=true;
+      }
+    }
+    // Step 3: Google fallback — search for "[product name] ingredients" and extract from result
+    if (!found) {
+      setLoading('Searching the web…', 'trying Google as fallback');
+      const r = await googleIngredientsFallback(inputVal);
+      if (r?.ingredients) {
+        productName=r.productName||inputVal; brand=r.brand||''; ingredientsText=r.ingredients; source='Web'; found=true;
+      }
+    }
+    if (!found) productName = inputVal;
+  }
+
+  await runAnalysis(productName, brand, ingredientsText, source);
+}
+
+// ── googleIngredientsFallback: last-resort Google search for any product ──
+async function googleIngredientsFallback(query) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 18000);
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1500,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        tool_choice: { type: 'any' },
+        messages: [{ role: 'user', content:
+          'Search for: ' + query.replace(/"/g,'') + ' ingredients skincare' +
+          '\n\nFind the full INCI ingredient list for this cosmetic product.' +
+          '\nLook for sources like INCIDecoder, INCI Beauty, Beautypedia, the brand website, or Sephora.' +
+          '\n\nRespond with exactly three lines, nothing else:' +
+          '\nPRODUCT: <full official product name>' +
+          '\nBRAND: <brand name>' +
+          '\nINGREDIENTS: <full comma-separated INCI ingredient list>'
+        }],
+      }),
+    });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (data.error) return null;
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+    const productMatch = text.match(/PRODUCT:\s*(.+)/i);
+    const brandMatch   = text.match(/BRAND:\s*(.+)/i);
+    const ingMatch     = text.match(/INGREDIENTS:\s*([\s\S]+)/i);
+    if (!ingMatch || ingMatch[1].trim().length < 20) return null;
+    return {
+      productName: productMatch ? productMatch[1].trim() : query,
+      brand:       brandMatch   ? brandMatch[1].trim()   : '',
+      ingredients: ingMatch[1].trim().split('\n')[0], // first line only
+    };
+  } catch(e) {
+    clearTimeout(timer);
+    return null;
+  }
+}
+
+// ── runAnalysis: shared analysis path (text search + photo both end up here) ──
+async function runAnalysis(productName, brand, ingredientsText, source) {
+  setLoading('Analyzing ingredients…','');
+  await new Promise(r=>setTimeout(r,280));
+
+  const ingredients = parseIngredients(ingredientsText);
+  if (!ingredients.length) { showNotFound(productName); return; }
+
+  const skinTypes = [...selectedTypes];
+
+  // ── Compute per-category results & scores ──
+  const cats = [];
+
+  if (selectedTypes.has('clog-prone') || selectedTypes.has('oily')) {
+    const f = checkComedogenic(ingredients);
+    cats.push({ key:'comedo', icon:'⬤', name:'Pore-clogging', desc: f.length===0 ? 'No comedogenic ingredients found.' : null,
+      flagged: f.map(x=>({name:x.name, severity: x.score>=4?'high':'mid'})),
+      score: comedoScore(f), weight: 1.5 });
+  }
+  if (selectedTypes.has('oily')) {
+    const f = checkList(ingredients, OILY_HEAVY);
+    cats.push({ key:'oily', icon:'💧', name:'Heavy / occlusive', desc: f.length===0 ? 'No heavy waxes or butters detected.' : null,
+      flagged: f.map(n=>({name:n, severity:'mid'})),
+      score: scoreCategory(f.length), weight: 0.8 });
+  }
+  if (selectedTypes.has('dry')) {
+    const f = checkList(ingredients, DRY_HARMFUL);
+    cats.push({ key:'dry', icon:'🌵', name:'Drying / stripping', desc: f.length===0 ? 'No harsh drying agents detected.' : null,
+      flagged: f.map(n=>({name:n, severity: f.length>1?'high':'mid'})),
+      score: scoreCategory(f.length, f.length>1?1:0), weight: 1.2 });
+  }
+  if (selectedTypes.has('sensitive')) {
+    const f = checkList(ingredients, IRRITANTS);
+    cats.push({ key:'irrit', icon:'⚡', name:'Irritants', desc: f.length===0 ? 'No common irritants detected.' : null,
+      flagged: f.map(n=>({name:n, severity: n.toLowerCase().includes('fragrance')||n.toLowerCase().includes('alcohol denat')?'high':'mid'})),
+      score: scoreCategory(f.length, f.filter(n=>n.toLowerCase().includes('fragrance')).length), weight: 1.3 });
+  }
+  if (selectedTypes.has('rosacea')) {
+    const f = checkList(ingredients, ROSACEA_TRIGGERS);
+    cats.push({ key:'rosa', icon:'🌹', name:'Rosacea triggers', desc: f.length===0 ? 'No rosacea triggers found.' : null,
+      flagged: f.map(n=>({name:n, severity:'mid'})),
+      score: scoreCategory(f.length, 0), weight: 1.4 });
+  }
+  if (selectedTypes.has('eczema')) {
+    const f = checkList(ingredients, IRRITANTS);
+    cats.push({ key:'eczema', icon:'🍃', name:'Eczema irritants', desc: f.length===0 ? 'No eczema irritants detected.' : null,
+      flagged: f.map(n=>({name:n, severity:'mid'})),
+      score: scoreCategory(f.length, 0), weight: 1.3 });
+  }
+
+  // Allergens — always
+  const allergens = checkList(ingredients, ALLERGENS);
+  cats.push({ key:'allergen', icon:'⚠', name:'EU allergens', desc: allergens.length===0 ? 'No EU-listed allergens detected.' : null,
+    flagged: allergens.map(n=>({name:n, severity: allergens.length>1?'high':'mid'})),
+    score: scoreCategory(allergens.length, allergens.length>1?1:0), weight: 1.0 });
+
+  // Overall
+  const overall = cats.length ? overallScore(cats) : 0;
+  const verdict = verdictFromScore(overall);
+
+  renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes });
+  getAIAnalysis(productName, ingredients, verdict, skinTypes).then(text => {
+    const el = document.getElementById('aiText');
+    if (el && text) el.textContent = text;
+  });
+}
+
+function setLoading(main, sub) {
+  document.getElementById('loadingMain').textContent = main;
+  document.getElementById('loadingSub').textContent = sub || '';
+}
+function showNotFound(name) {
+  document.getElementById('loading').classList.remove('show');
+  document.getElementById('results').innerHTML = `
+    <div class="not-found">
+      <div class="not-found-title">🔍 Product not found</div>
+      <div class="not-found-desc">
+        "${escHtml(name)}" wasn't found. A few options:
+      </div>
+      <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px">
+        <div style="font-size:12.5px;color:rgba(26,20,16,0.6);line-height:1.6">
+          <strong style="color:var(--dark)">Option 1 — Paste ingredients</strong><br>
+          Go to <a href="https://incidecoder.com" target="_blank" style="color:var(--terra)">incidecoder.com</a>, find your product, copy the full ingredient list and paste it in the search box.
+        </div>
+        <div style="font-size:12.5px;color:rgba(26,20,16,0.6);line-height:1.6">
+          <strong style="color:var(--dark)">Option 2 — Try a different name</strong><br>
+          Use the exact brand name + product name (e.g. "Drunk Elephant Protini" instead of "peptide cream").
+        </div>
+      </div>
+    </div>
+    <button class="new-scan" onclick="resetScan()">← Try Again</button>`;
+  document.getElementById('results').classList.add('show');
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// RENDER
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes }) {
+  document.getElementById('loading').classList.remove('show');
+
+  const skinLabels = { 'clog-prone':'Clog-prone','sensitive':'Sensitive','dry':'Dry','oily':'Oily','rosacea':'Rosacea','eczema':'Eczema' };
+
+  const verdictMeta = {
+    safe:    { icon: '✓', title: 'Looks good',         desc: 'No significant concerns for your selected skin types.' },
+    caution: { icon: '!', title: 'Use with caution',   desc: 'A few ingredients worth watching for your skin.' },
+    avoid:   { icon: '✕', title: 'Not recommended',    desc: 'Several ingredients are problematic for your skin types.' },
+  }[verdict];
+
+  // Category rows — bar + plain-text flagged list
+  const catHTML = cats.map(c => {
+    const pct = Math.round((c.score / 5) * 100);
+    const cls = `c${c.score}`;
+    const flagText = c.flagged.length
+      ? c.flagged.map(f => `<strong>${escHtml(f.name)}</strong>`).join(', ')
+      : null;
+    return `
+      <div class="cat-row">
+        <div class="cat-top">
+          <span class="cat-name">${c.name}</span>
+          <span class="cat-num ${cls}">${c.score} / 5</span>
+        </div>
+        <div class="cat-bar-track"><div class="cat-bar-fill ${cls}" style="width:${pct}%"></div></div>
+        ${flagText
+          ? `<div class="cat-flagged">${flagText}</div>`
+          : `<div class="cat-ok">${escHtml(c.desc)}</div>`}
+      </div>`;
+  }).join('');
+
+  document.getElementById('results').innerHTML = `
+    ${brand ? `<div class="r-brand">${escHtml(brand)}</div>` : ''}
+    <div class="r-name">${escHtml(productName)}</div>
+    <div class="r-meta">${ingredients.length} ingredients · ${escHtml(source)}</div>
+
+    <div class="verdict-banner ${verdict}">
+      <div class="verdict-left">
+        <div class="verdict-icon">${verdictMeta.icon}</div>
+        <div>
+          <div class="verdict-text-title">${verdictMeta.title}</div>
+          <div class="verdict-text-desc">${verdictMeta.desc}</div>
+        </div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div class="verdict-score">${overall.toFixed(1)}</div>
+        <div class="verdict-score-denom">out of 5</div>
+      </div>
+    </div>
+
+    <div class="r-skin-row">
+      <span class="r-skin-label">For:</span>
+      ${skinTypes.length ? skinTypes.map(t=>`<span class="r-skin-pill">${skinLabels[t]||t}</span>`).join('') : '<span class="r-skin-pill">General</span>'}
+    </div>
+
+    <div class="cats">${catHTML}</div>
+
+    <div class="ai-block">
+      <div class="ai-label">Chemist's note</div>
+      <div id="aiText"><div class="ai-dots"><span class="ai-dot"></span><span class="ai-dot"></span><span class="ai-dot"></span></div></div>
+    </div>
+
+    <button class="new-scan" onclick="resetScan()">← Scan another product</button>
+  `;
+  document.getElementById('results').classList.add('show');
+}
+
+function resetScan() {
+  document.getElementById('results').classList.remove('show');
+  document.getElementById('results').innerHTML = '';
+  document.getElementById('inputSection').style.display = '';
+  selectedProduct = null; productInput.value = ''; productInput.focus();
+  clearPhoto();
+  window.scrollTo({ top:0, behavior:'smooth' });
+}
+function escHtml(s) {
+  return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : '';
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SERVICE WORKER REGISTRATION
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if ('serviceWorker' in navigator) {
+  // Inline service worker as a blob — no separate sw.js file needed
+  const swCode = `
+    const CACHE = 'skinscan-v1';
+    const SHELL = ['./'];
+    self.addEventListener('install', e => {
+      e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
+      self.skipWaiting();
+    });
+    self.addEventListener('activate', e => {
+      e.waitUntil(caches.keys().then(keys =>
+        Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+      ));
+      self.clients.claim();
+    });
+    self.addEventListener('fetch', e => {
+      // Only cache same-origin requests; pass API calls through
+      const url = new URL(e.request.url);
+      if (url.hostname === 'api.anthropic.com' ||
+          url.hostname === 'world.openbeautyfacts.org' ||
+          url.hostname === 'fonts.googleapis.com' ||
+          url.hostname === 'fonts.gstatic.com') {
+        return; // network-only for API/font calls
+      }
+      e.respondWith(
+        caches.match(e.request).then(cached => cached || fetch(e.request).then(resp => {
+          const clone = resp.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+          return resp;
+        }))
+      );
+    });
+  `;
+  const blob = new Blob([swCode], { type: 'application/javascript' });
+  const swUrl = URL.createObjectURL(blob);
+  navigator.serviceWorker.register(swUrl, { scope: './' })
+    .then(() => console.log('SkinScan SW registered'))
+    .catch(e => console.log('SW registration skipped:', e.message));
+}
+</script>
+</body>
+</html>
