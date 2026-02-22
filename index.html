@@ -1102,6 +1102,13 @@ async function googleIngredientsFallback(query) {
   }
 }
 
+// ── parseIngredients: split INCI string into individual ingredient names ──
+function parseIngredients(text) {
+  return text.replace(/\*/g, '').split(/,|;|\n/)
+    .map(i => i.trim().replace(/^\s*[-·•]\s*/, ''))
+    .filter(i => i.length > 2 && i.length < 120);
+}
+
 // ── runAnalysis: shared analysis path (text search + photo both end up here) ──
 async function runAnalysis(productName, brand, ingredientsText, source) {
   setLoading('Analyzing ingredients…', 'AI is checking every ingredient');
