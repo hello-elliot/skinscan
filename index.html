@@ -223,12 +223,10 @@
 <main>
   <div class="section-label">My skin is</div>
   <div class="skin-chips" id="skinChips">
-    <button class="chip active" data-type="clog-prone">Clog-prone</button>
-    <button class="chip active" data-type="sensitive">Sensitive</button>
+    <button class="chip" data-type="acne-prone">Acne-prone</button>
+    <button class="chip" data-type="sensitive">Sensitive / Reactive</button>
     <button class="chip" data-type="dry">Dry</button>
-    <button class="chip" data-type="oily">Oily</button>
-    <button class="chip" data-type="rosacea">Rosacea</button>
-    <button class="chip" data-type="eczema">Eczema</button>
+    <button class="chip" data-type="normal">Normal</button>
   </div>
 
   <div id="inputSection">
@@ -264,7 +262,7 @@
     <div id="photoPreview" style="display:none;margin:8px 0 10px;position:relative">
       <img id="photoImg" style="width:100%;border-radius:10px;max-height:150px;object-fit:cover;border:1.5px solid rgba(196,98,45,0.25)" alt="Ingredient photo">
       <button onclick="clearPhoto()" style="position:absolute;top:7px;right:7px;background:rgba(20,14,10,0.55);border:none;color:white;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:14px;line-height:24px;text-align:center;backdrop-filter:blur(4px)">×</button>
-      <div style="position:absolute;bottom:7px;left:9px;background:rgba(20,14,10,0.55);color:white;font-size:10.5px;padding:3px 8px;border-radius:20px;backdrop-filter:blur(4px)">Tap Analyze to scan this label</div>
+      <div style="position:absolute;bottom:7px;left:9px;background:rgba(20,14,10,0.55);color:white;font-size:10.5px;padding:3px 8px;border-radius:20px;backdrop-filter:blur(4px)">Tap Analyze to scan this label — database tabs ignored</div>
     </div>
 
     <div class="suggestions" id="suggestions"></div>
@@ -312,10 +310,11 @@ function cacheSet(prefix, q, val) { if (val) _searchCache[cacheKey(prefix, q)] =
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // STATE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const selectedTypes = new Set(['clog-prone', 'sensitive']);
+const selectedTypes = new Set();  // nothing pre-selected — user must choose
 let activeSource = 'both';
 let selectedProduct = null;
 let capturedPhotoBase64 = null;   // base64 image data from camera
+let lastAnalysisData = null;      // gap #4: store last result for re-analysis
 const productInput = document.getElementById('productInput');
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -469,6 +468,9 @@ function handlePhotoUpload(event) {
       productInput.value = '';
       selectedProduct = null;
       hideSuggestions();
+      // gap #8: dim source tabs when photo staged
+      document.querySelector('.source-tabs').style.opacity = '0.35';
+      document.querySelector('.source-tabs').style.pointerEvents = 'none';
     };
     img.onerror = () => {
       // Fallback: send raw if canvas fails (shouldn't happen)
@@ -488,6 +490,9 @@ function clearPhoto() {
   document.getElementById('photoPreview').style.display = 'none';
   document.getElementById('photoImg').src = '';
   document.getElementById('photoBtn').classList.remove('photo-active');
+  // gap #8: restore source tabs
+  document.querySelector('.source-tabs').style.opacity = '';
+  document.querySelector('.source-tabs').style.pointerEvents = '';
 }
 
 // ── analyzePhoto: send image to Claude Vision, extract ingredients ──
@@ -791,255 +796,44 @@ async function pickProduct(i) {
   selectedProduct = {...p};
   productInput.value = p.name + (p.brand ? ' — ' + p.brand : '');
   hideSuggestions();
-  if (p.source==='inci' && !p.ingredientsText && p.slug) {
-    setLoading('Fetching from INCIDecoder…', p.name);
-    document.getElementById('loading').classList.add('show');
+
+  // If INCI product has no ingredients yet, fetch them first then go straight to analysis
+  if (p.source === 'inci' && !p.ingredientsText && p.slug) {
     document.getElementById('inputSection').style.display = 'none';
+    document.getElementById('loading').classList.add('show');
+    document.getElementById('results').classList.remove('show');
+    document.getElementById('results').innerHTML = '';
+    setLoading('Fetching ingredients…', p.name);
     const result = await fetchInciIngredients(p.slug);
-    document.getElementById('loading').classList.remove('show');
-    document.getElementById('inputSection').style.display = '';
     if (result?.ingredients) {
       selectedProduct.ingredientsText = result.ingredients;
       selectedProduct.name = result.productName || p.name;
       selectedProduct.brand = result.brand || p.brand;
+      await runAnalysis(selectedProduct.name, selectedProduct.brand, selectedProduct.ingredientsText, 'INCIDecoder');
+    } else {
+      // Fetch failed — return to input so user can try manually
+      document.getElementById('loading').classList.remove('show');
+      document.getElementById('inputSection').style.display = '';
     }
+    return;
   }
-}
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// INGREDIENT DATABASES
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Each entry is an array of match terms — the ingredient is flagged if ANY term
-// appears in the lowercased INCI name. This handles both common names and INCI
-// binomials (e.g. "shea butter" AND "butyrospermum parkii").
-// Score 5 = highly comedogenic, 4 = comedogenic, 3 = moderately comedogenic.
-
-const COMEDOGENIC = [
-  // ── Score 5 — highly comedogenic ──
-  { terms:["isopropyl myristate"],                        score:5 },
-  { terms:["myristyl myristate"],                         score:5 },
-  { terms:["isopropyl linoleate"],                        score:5 },
-  { terms:["octyl stearate"],                             score:5 },
-  { terms:["isocetyl stearate"],                          score:5 },
-  { terms:["sodium lauryl sulfate","sls ","sls,","sls)"], score:5 },
-  { terms:["algae extract","red algae","algae oil"],      score:5 },
-  { terms:["wheat germ oil","triticum vulgare germ"],     score:5 },
-  { terms:["polysorbate 80"],                             score:4 },
-  { terms:["steareth-2"],                                 score:4 },
-
-  // ── Score 4 — comedogenic ──
-  { terms:["coconut oil","cocos nucifera oil"],            score:4 },
-  { terms:["cocoa butter","theobroma cacao seed butter"],  score:4 },
-  { terms:["palm oil","elaeis guineensis oil"],            score:4 },
-  { terms:["flaxseed oil","linum usitatissimum seed oil"], score:4 },
-  { terms:["acetylated lanolin"],                          score:4 },
-  { terms:["isopropyl palmitate"],                         score:4 },
-  { terms:["isopropyl isostearate"],                       score:4 },
-  { terms:["octyl palmitate"],                             score:4 },
-  { terms:["ethylhexyl palmitate"],                        score:4 },
-  { terms:["myristyl propionate"],                         score:4 },
-  { terms:["lauric acid"],                                 score:4 },
-  { terms:["sulfated castor oil"],                         score:4 },
-  { terms:["myristyl lactate"],                            score:4 },
-  { terms:["carrageenan"],                                 score:4 },
-  { terms:["acetylated lanolin alcohol"],                  score:4 },
-  { terms:["pentaerythrityl tetraethylhexanoate"],         score:4 },
-  { terms:["pentaerythrityl tetrastearate"],               score:4 },
-  { terms:["cetyl ethylhexanoate"],                        score:4 },
-  { terms:["cholesterol"],                                 score:3 },
-
-  // ── Score 3 — moderately comedogenic ──
-  { terms:["shea butter","butyrospermum parkii"],                  score:3 },
-  { terms:["avocado oil","persea gratissima oil"],                  score:3 },
-  { terms:["argan oil","argania spinosa kernel oil"],               score:3 },
-  { terms:["marula oil","sclerocarya birrea seed oil"],             score:3 },
-  { terms:["jojoba oil","simmondsia chinensis seed oil"],           score:3 },
-  { terms:["castor oil","ricinus communis seed oil"],               score:3 },
-  { terms:["hydrogenated vegetable oil"],                           score:3 },
-  { terms:["hydrogenated coconut oil"],                             score:3 },
-  { terms:["hydrogenated palm"],                                    score:3 },
-  { terms:["hydrogenated poly(c6","hydrogenated poly(c10","hydrogenated polyisobutene"], score:3 },
-  { terms:["dimethicone"],                                          score:3 },
-  { terms:["cyclomethicone","cyclopentasiloxane","cyclohexasiloxane"], score:3 },
-  { terms:["polymethylsilsesquioxane"],                             score:3 },
-  { terms:["cetearyl alcohol"],                                     score:3 },
-  { terms:["cetyl alcohol"],                                        score:3 },
-  { terms:["stearyl alcohol"],                                      score:3 },
-  { terms:["behenyl alcohol"],                                      score:2 },
-  { terms:["glyceryl stearate"],                                    score:3 },
-  { terms:["glyceryl oleate"],                                      score:3 },
-  { terms:["sorbitan oleate"],                                      score:3 },
-  { terms:["sorbitan laurate"],                                     score:3 },
-  { terms:["palmitic acid"],                                        score:3 },
-  { terms:["stearic acid"],                                         score:2 },
-  { terms:["oleic acid"],                                           score:2 },
-  { terms:["myristic acid"],                                        score:3 },
-  { terms:["butyl stearate"],                                       score:3 },
-  { terms:["decyl oleate"],                                         score:3 },
-  { terms:["lanolin"],                                              score:3 },
-  { terms:["petroleum","petrolatum"],                               score:3 },
-  { terms:["linseed oil","linum usitatissimum"],                    score:3 },
-  { terms:["squalene"],                                             score:3 },
-  { terms:["microcrystalline wax"],                                 score:3 },
-  { terms:["ozokerite","ceresin"],                                  score:3 },
-  { terms:["peg-100 stearate"],                                     score:2 },
-  { terms:["steareth-20","steareth-21","steareth-100"],             score:2 },
-  { terms:["olive oil","olea europaea fruit oil"],                  score:2 },
-  { terms:["sunflower oil","helianthus annuus seed oil"],           score:2 },
-  { terms:["rosehip","rosa canina fruit oil"],                      score:2 },
-];
-
-// For OILY_HEAVY, IRRITANTS etc. we keep the array-of-terms approach too
-const OILY_HEAVY = [
-  ["petrolatum"],["mineral oil"],["paraffin"],
-  ["beeswax","cera alba"],["carnauba wax","copernicia cerifera"],
-  ["candelilla wax","euphorbia cerifera"],
-  ["shea butter","butyrospermum parkii"],
-  ["cocoa butter","theobroma cacao seed butter"],
-  ["avocado oil","persea gratissima"],
-  ["argan oil","argania spinosa"],
-  ["lanolin","wool wax"],["tallow"],["lard"],
-  ["hydrogenated vegetable oil"],["hydrogenated coconut"],
-  ["hydrogenated poly(c","hydrogenated polyisobutene"],
-  ["dimethicone"],["cyclomethicone","cyclopentasiloxane"],
-];
-
-const DRY_HARMFUL = [
-  ["alcohol denat","denatured alcohol","sd alcohol","alcohol (denat"],
-  ["isopropyl alcohol"],
-  ["salicylic acid"],["glycolic acid"],["benzoyl peroxide"],
-  ["retinoic acid","tretinoin"],
-  ["sodium lauryl sulfate","sls "],
-  ["sodium laureth sulfate","sles"],
-  ["witch hazel","hamamelis"],
-  ["acetone"],
-];
-
-const IRRITANTS = [
-  ["fragrance","parfum"],
-  ["alcohol denat","denatured alcohol","sd alcohol"],
-  ["menthol"],["peppermint","mentha"],
-  ["eucalyptus"],["camphor"],["tea tree","melaleuca"],
-  ["lemon","citrus limon"],["lime","citrus aurantifolia"],
-  ["grapefruit","citrus paradisi"],
-  ["bergamot","citrus bergamia"],
-  ["cinnamon","cinnamomum"],["clove","eugenia caryophyllus"],
-  ["ylang ylang","cananga odorata"],
-  ["lavender oil","lavandula angustifolia oil"],
-  ["sodium lauryl sulfate"],
-  ["glycolic acid"],["lactic acid"],
-  ["benzoyl peroxide"],["resorcinol"],
-  ["methylisothiazolinone","methylchloroisothiazolinone"],
-  ["phenoxyethanol"],
-  ["isopropyl alcohol"],
-  ["chlorhexidine"],
-];
-
-const ROSACEA_TRIGGERS = [
-  ["fragrance","parfum"],
-  ["alcohol denat","denatured alcohol","sd alcohol"],
-  ["menthol"],["peppermint","mentha"],["eucalyptus"],["camphor"],
-  ["cinnamon","cinnamomum"],["clove","eugenia"],
-  ["lemon","citrus limon"],["citrus"],
-  ["witch hazel","hamamelis"],
-  ["glycolic acid"],["lactic acid"],["salicylic acid"],
-  ["benzoyl peroxide"],
-  ["retinol","retinoic acid","tretinoin"],
-  ["sodium lauryl sulfate"],
-  ["methylisothiazolinone"],
-  ["benzyl alcohol"],
-];
-
-const ALLERGENS = [
-  ["fragrance","parfum"],
-  ["cinnamal"],["eugenol"],["geraniol"],["hydroxycitronellal"],
-  ["isoeugenol"],["benzyl salicylate"],["cinnamyl alcohol"],
-  ["citral"],["coumarin"],["farnesol"],["hexyl cinnamal"],
-  ["lilial","butylphenyl methylpropional"],["limonene"],["linalool"],
-  ["methyl heptine carbonate"],["oak moss","evernia prunastri"],
-  ["tree moss","evernia furfuracea"],
-  ["alpha isomethyl ionone"],
-  ["methylparaben"],["propylparaben"],["butylparaben"],["ethylparaben"],
-  ["methylisothiazolinone"],
-  ["imidazolidinyl urea"],["dmdm hydantoin"],
-];
-const ECZEMA_TRIGGERS = [
-  ["fragrance","parfum"],
-  ["sodium lauryl sulfate","sls "],
-  ["sodium laureth sulfate","sles"],
-  ["methylisothiazolinone","methylchloroisothiazolinone","mit "],
-  ["imidazolidinyl urea"],["dmdm hydantoin"],["quaternium-15"],
-  ["formaldehyde"],
-  ["propylene glycol"],
-  ["cocamidopropyl betaine"],
-  ["lanolin","wool wax"],
-  ["neomycin"],["bacitracin"],
-  ["benzalkonium chloride"],
-  ["ethylhexylglycerin"],
-  ["iodopropynyl butylcarbamate"],
-  ["methylparaben"],["propylparaben"],["butylparaben"],
-  ["phenoxyethanol"],
-  ["alcohol denat","denatured alcohol","sd alcohol"],
-  ["menthol"],["camphor"],["eucalyptus"],
-  ["citral"],["limonene"],["linalool"],["geraniol"],["eugenol"],
-];
-
-
-// ── parseIngredients: handle long INCI names (raise length limit) ──
-function parseIngredients(text) {
-  return text.replace(/\*/g,'').split(/,|;|\n/)
-    .map(i => i.trim().replace(/^\s*[-·•]\s*/,''))
-    .filter(i => i.length > 2 && i.length < 120);  // was 80, INCI names can be long
-}
-
-// ── checkList: match any term in any entry against ingredient ──
-function checkList(ings, list) {
-  const out = [];
-  for (const ing of ings) {
-    const k = ing.toLowerCase();
-    for (const entry of list) {
-      const terms = Array.isArray(entry) ? entry : [entry];
-      if (terms.some(t => k.includes(t)) && !out.includes(ing)) {
-        out.push(ing);
-        break;
-      }
-    }
+  // OBF products already have ingredientsText — go straight to analysis
+  if (p.ingredientsText) {
+    document.getElementById('inputSection').style.display = 'none';
+    document.getElementById('loading').classList.add('show');
+    document.getElementById('results').classList.remove('show');
+    document.getElementById('results').innerHTML = '';
+    await runAnalysis(p.name, p.brand || '', p.ingredientsText, 'Open Beauty Facts');
+    return;
   }
-  return out;
-}
 
-// ── checkComedogenic: use new array-of-objects DB ──
-function checkComedogenic(ings) {
-  const out = [];
-  for (const ing of ings) {
-    const k = ing.toLowerCase();
-    for (const entry of COMEDOGENIC) {
-      if (entry.score >= 2 && entry.terms.some(t => k.includes(t)) && !out.find(f => f.name === ing)) {
-        out.push({ name: ing, score: entry.score });
-        break;
-      }
-    }
-  }
-  return out.sort((a, b) => b.score - a.score);
+  // No ingredients yet and no slug — leave at input for manual Analyze tap
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// SCORING — each category scored 0–5
+// SCORING
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Scale: 0 flagged → 0, 1 → 1–2, 2 → 2–3, 3+ → 4–5
-// High-severity ingredients push the score up faster
-function scoreCategory(flaggedCount, highSeverityCount = 0) {
-  let s = 0;
-  if (flaggedCount === 0) return 0;
-  s = Math.min(flaggedCount, 3) + Math.min(highSeverityCount, 2);
-  return Math.min(Math.round(s), 5);
-}
-function comedoScore(flagged) {
-  if (!flagged.length) return 0;
-  const high = flagged.filter(f => f.score >= 4).length;
-  const mid  = flagged.filter(f => f.score === 3).length;
-  return Math.min(Math.round(high * 1.8 + mid * 0.8), 5);
-}
 function overallScore(cats) {
   if (!cats.length) return 0;
   // Weighted average, weight by importance
@@ -1054,23 +848,112 @@ function verdictFromScore(s) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// AI ANALYSIS
+// AI INGREDIENT CHECK (OPTION A)
+// One Claude call evaluates EVERY ingredient in the list — no hardcoded
+// limit. Returns structured JSON driving all category scores.
+// Falls back to hardcoded lists if the call fails.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async function getAIAnalysis(productName, ingredients, verdict, skinTypes) {
+async function claudeIngredientCheck(ingredients, skinTypes) {
+  const concerns = [];
+  if (skinTypes.includes('acne-prone'))  concerns.push('acne-prone (comedogenicity, pore-clogging, heavy occlusives)');
+  if (skinTypes.includes('sensitive'))   concerns.push('sensitive/reactive (irritants, sensitisers, essential oils, harsh preservatives, EU fragrance allergens)');
+  if (skinTypes.includes('dry'))         concerns.push('dry skin (drying agents, alcohol, stripping surfactants, exfoliating acids)');
+  concerns.push('EU allergens (the 26 fragrance allergens listed in EU Regulation 1223/2009)');
+
+  const prompt = `You are a cosmetic chemist. Evaluate this INCI ingredient list for: ${concerns.join('; ')}.
+
+INGREDIENTS (${ingredients.length}, descending concentration):
+${ingredients.join(', ')}
+
+Respond with ONLY a JSON object — no markdown, no text outside the JSON:
+{
+  "acne": [{"name": "<exact name from list>", "severity": "high"|"mid", "reason": "<short phrase>"}],
+  "sensitive": [{"name": "...", "severity": "high"|"mid", "reason": "..."}],
+  "dry": [{"name": "...", "severity": "high"|"mid", "reason": "..."}],
+  "allergens": [{"name": "...", "severity": "high"|"mid", "reason": "..."}]
+}
+
+Rules:
+- Only include keys for concerns listed above. Always include "allergens".
+- Use exact ingredient names as they appear above. Empty array [] if nothing flagged.
+- acne: Fulton scale 3+, heavy occlusives. sensitive: fragrance, essential oils, known sensitisers, harsh preservatives. dry: drying alcohols, SLS/SLES, strong acids. allergens: EU Regulation 1223/2009 fragrance allergens, parabens, isothiazolinones.`;
+
+  // Hard 20s timeout wrapping the entire call including body read
+  return Promise.race([
+    (async () => {
+      try {
+        const res = await fetch(apiUrl(), {
+          method: 'POST', headers: authHeaders(),
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 1200,
+            messages: [{ role: 'user', content: prompt }]
+          })
+        });
+        const rawText = await res.text();
+        console.log('[claudeCheck] HTTP status:', res.status);
+        console.log('[claudeCheck] Raw response (first 500):', rawText.slice(0, 500));
+        let data;
+        try { data = JSON.parse(rawText); }
+        catch(pe) { console.error('[claudeCheck] JSON parse failed:', pe.message, 'raw:', rawText.slice(0,200)); return null; }
+        if (data.error) { console.warn('[claudeCheck] API error:', JSON.stringify(data.error)); return null; }
+        const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+        const clean = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+        console.log('[claudeCheck] Claude text output:', clean.slice(0, 300));
+        return JSON.parse(clean);
+      } catch(e) {
+        console.error('[claudeCheck] fetch/parse exception:', e.message);
+        return null;
+      }
+    })(),
+    new Promise(resolve => setTimeout(() => { console.warn('[claudeCheck] hard 20s timeout fired'); resolve(null); }, 20000))
+  ]);
+}
+
+// ── Chemist's note: pure narrative, runs after render ──
+async function getChemistNote(productName, ingredients, verdict, skinTypes, aiFlags) {
   const skinList = skinTypes.join(', ') || 'general skin';
+  // Pass the AI flags as context so the note doesn't repeat what the rows already say
+  const flagSummary = aiFlags
+    ? Object.entries(aiFlags)
+        .filter(([k]) => k !== 'notes')
+        .flatMap(([, arr]) => (arr || []).map(f => f.name))
+        .filter((v, i, a) => a.indexOf(v) === i)
+        .slice(0, 10)
+        .join(', ')
+    : '';
   try {
     const res = await fetch(apiUrl(), {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6', max_tokens: 1000,
+        model: 'claude-sonnet-4-6', max_tokens: 300,
         messages: [{ role: 'user', content:
-          `You are a cosmetic chemist. Analyze for someone with ${skinList} skin.\n\nProduct: ${productName}\nIngredients: ${ingredients.slice(0,40).join(', ')}\nSafety result: ${verdict}\n\n2–3 plain sentences. Address their specific concerns (${skinList}). Name 1–2 most relevant ingredients. End with one actionable tip. Direct, no marketing.`
+          `You are a cosmetic chemist. Write a brief note for someone with ${skinList} skin about this product.
+
+Product: ${productName}
+Key flagged ingredients: ${flagSummary || 'none'}
+Overall assessment: ${verdict}
+First 20 ingredients: ${ingredients.slice(0,20).join(', ')}
+
+Write 2 sentences maximum. Focus on what the user should actually do or watch for. No marketing language. Do not repeat the flagged ingredients list — the user can already see it. You may use **bold** for ingredient names or a Tip label. Keep formatting minimal.`
         }]
       })
     });
     const data = await res.json();
     return data.content?.[0]?.text || null;
   } catch(e) { return null; }
+}
+
+// ── isPastedIngredientList: distinguish pasted INCI list from a product name ──
+// Requires: 3+ commas AND average token length < 32 chars (INCI names are short).
+// This prevents "La Roche-Posay Toleriane Double Repair Face Moisturizer, SPF 30"
+// (1 comma, long tokens) from being misread as an ingredient list.
+function isPastedIngredientList(text) {
+  const commas = (text.match(/,/g) || []).length;
+  if (commas < 3) return false;
+  const tokens = text.split(',').map(t => t.trim()).filter(Boolean);
+  const avgLen = tokens.reduce((s, t) => s + t.length, 0) / tokens.length;
+  return avgLen < 32;  // INCI names average ~12 chars; product names much longer
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1123,8 +1006,8 @@ async function doScan() {
     const r = await fetchInciIngredients(selectedProduct.slug);
     if (r?.ingredients) { productName=r.productName||selectedProduct.name; brand=r.brand||selectedProduct.brand||''; ingredientsText=r.ingredients; source='INCIDecoder'; }
     else productName = selectedProduct.name;
-  } else if (inputVal.includes(',') && inputVal.length > 60) {
-    // Pasted ingredient list — use directly
+  } else if (isPastedIngredientList(inputVal)) {
+    // Pasted ingredient list — use directly (gap #3 fix: smarter detection)
     productName='Custom Product'; ingredientsText=inputVal; source='Pasted';
   } else {
     let found = false;
@@ -1136,7 +1019,16 @@ async function doScan() {
         const res=await fetch(url,{headers:{'User-Agent':'SkinScan/1.0 (skinscan@example.com)'}});
         const data=await res.json();
         const prods=(data.products||[]).filter(p=>p.ingredients_text?.length>20);
-        if (prods.length) { const p=prods[0]; productName=p.product_name||inputVal; brand=p.brands||''; ingredientsText=p.ingredients_text; source='Open Beauty Facts'; found=true; }
+        if (prods.length) {
+          // Sort by name-match relevance before picking (gap #2 fix)
+          const qWords = inputVal.toLowerCase().split(/\s+/);
+          prods.sort((a,b) => {
+            const scoreA = qWords.filter(w => (a.product_name||'').toLowerCase().includes(w)).length;
+            const scoreB = qWords.filter(w => (b.product_name||'').toLowerCase().includes(w)).length;
+            return scoreB - scoreA;
+          });
+          const p=prods[0]; productName=p.product_name||inputVal; brand=p.brands||''; ingredientsText=p.ingredients_text; source='Open Beauty Facts'; found=true;
+        }
       } catch(e){}
     }
     // Step 2: INCIDecoder via search snippet
@@ -1212,69 +1104,91 @@ async function googleIngredientsFallback(query) {
 
 // ── runAnalysis: shared analysis path (text search + photo both end up here) ──
 async function runAnalysis(productName, brand, ingredientsText, source) {
-  setLoading('Analyzing ingredients…','');
-  await new Promise(r=>setTimeout(r,280));
+  setLoading('Analyzing ingredients…', 'AI is checking every ingredient');
+  await new Promise(r => setTimeout(r, 120));
 
   const ingredients = parseIngredients(ingredientsText);
   if (!ingredients.length) { showNotFound(productName); return; }
 
   const skinTypes = [...selectedTypes];
+  const noSkinWarning = skinTypes.length === 0 || (skinTypes.length === 1 && skinTypes[0] === 'normal');
+  const noSkinSelected = selectedTypes.size === 0 || (selectedTypes.size === 1 && selectedTypes.has('normal'));
 
-  // ── Compute per-category results & scores ──
-  const cats = [];
-
-  if (selectedTypes.has('clog-prone') || selectedTypes.has('oily')) {
-    const f = checkComedogenic(ingredients);
-    cats.push({ key:'comedo', icon:'●', name:'Pore-clogging', desc: f.length===0 ? 'No comedogenic ingredients found.' : null,
-      flagged: f.map(x=>({name:x.name, severity: x.score>=4?'high':'mid'})),
-      score: comedoScore(f), weight: 1.5 });
-  }
-  if (selectedTypes.has('oily')) {
-    const f = checkList(ingredients, OILY_HEAVY);
-    cats.push({ key:'oily', icon:'○', name:'Heavy / occlusive', desc: f.length===0 ? 'No heavy waxes or butters detected.' : null,
-      flagged: f.map(n=>({name:n, severity:'mid'})),
-      score: scoreCategory(f.length), weight: 0.8 });
-  }
-  if (selectedTypes.has('dry')) {
-    const f = checkList(ingredients, DRY_HARMFUL);
-    cats.push({ key:'dry', icon:'−', name:'Drying / stripping', desc: f.length===0 ? 'No harsh drying agents detected.' : null,
-      flagged: f.map(n=>({name:n, severity: f.length>1?'high':'mid'})),
-      score: scoreCategory(f.length, f.length>1?1:0), weight: 1.2 });
-  }
-  if (selectedTypes.has('sensitive')) {
-    const f = checkList(ingredients, IRRITANTS);
-    cats.push({ key:'irrit', icon:'△', name:'Irritants', desc: f.length===0 ? 'No common irritants detected.' : null,
-      flagged: f.map(n=>({name:n, severity: n.toLowerCase().includes('fragrance')||n.toLowerCase().includes('alcohol denat')?'high':'mid'})),
-      score: scoreCategory(f.length, f.filter(n=>n.toLowerCase().includes('fragrance')).length), weight: 1.3 });
-  }
-  if (selectedTypes.has('rosacea')) {
-    const f = checkList(ingredients, ROSACEA_TRIGGERS);
-    cats.push({ key:'rosa', icon:'◇', name:'Rosacea triggers', desc: f.length===0 ? 'No rosacea triggers found.' : null,
-      flagged: f.map(n=>({name:n, severity:'mid'})),
-      score: scoreCategory(f.length, 0), weight: 1.4 });
-  }
-  if (selectedTypes.has('eczema')) {
-    const f = checkList(ingredients, ECZEMA_TRIGGERS);
-    cats.push({ key:'eczema', icon:'◈', name:'Eczema triggers', desc: f.length===0 ? 'No common eczema triggers detected.' : null,
-      flagged: f.map(n=>({name:n, severity: n.toLowerCase().includes('fragrance')||n.toLowerCase().includes('sls')?'high':'mid'})),
-      score: scoreCategory(f.length, f.filter(n=>n.toLowerCase().includes('fragrance')||n.toLowerCase().includes('sls')).length), weight: 1.4 });
+  // ── Claude evaluates every ingredient ──
+  const aiFlags = await claudeIngredientCheck(ingredients, skinTypes);
+  if (!aiFlags) {
+    document.getElementById('loading').classList.remove('show');
+    document.getElementById('inputSection').style.display = '';
+    document.getElementById('results').innerHTML = `
+      <div class="not-found">
+        <div class="not-found-title">Analysis unavailable</div>
+        <div class="not-found-desc">The AI check failed or timed out. Check the browser console (F12 → Console) for the exact error — look for lines starting with [claudeCheck].</div>
+      </div>
+      <button class="new-scan" onclick="resetScan()">← Try Again</button>`;
+    document.getElementById('results').classList.add('show');
+    return;
   }
 
-  // Allergens — always
-  const allergens = checkList(ingredients, ALLERGENS);
-  cats.push({ key:'allergen', icon:'▲', name:'EU allergens', desc: allergens.length===0 ? 'No EU-listed allergens detected.' : null,
-    flagged: allergens.map(n=>({name:n, severity: allergens.length>1?'high':'mid'})),
-    score: scoreCategory(allergens.length, allergens.length>1?1:0), weight: 1.0 });
-
-  // Overall
+  const cats = buildCats(skinTypes, noSkinSelected, aiFlags);
   const overall = cats.length ? overallScore(cats) : 0;
   const verdict = verdictFromScore(overall);
 
-  renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes });
-  getAIAnalysis(productName, ingredients, verdict, skinTypes).then(text => {
+  lastAnalysisData = { productName, brand, ingredientsText, source };
+  renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes, noSkinWarning, dataSource: 'ai' });
+
+  // Chemist's note — short narrative, uses AI flags as context
+  getChemistNote(productName, ingredients, verdict, skinTypes, aiFlags).then(text => {
     const el = document.getElementById('aiText');
-    if (el && text) el.textContent = text;
+    if (!el) return;
+    if (text) {
+      el.innerHTML = `<div class="ai-text">${markdownToHtml(text)}</div>`;
+    } else {
+      el.innerHTML = '<span style="font-size:12px;color:rgba(26,20,16,0.28);font-style:italic">Note unavailable.</span>';
+    }
   });
+}
+
+
+// ── buildCats: construct cats array from Claude's aiFlags ──
+// Scoring: high severity = 1.5 pts, mid = 0.8 pts, capped at 5
+function buildCats(skinTypes, noSkinSelected, aiFlags) {
+  const score = (flagged) => {
+    if (!flagged.length) return 0;
+    const h = flagged.filter(x => x.severity === 'high').length;
+    const m = flagged.length - h;
+    return Math.min(Math.round(h * 1.5 + m * 0.8), 5);
+  };
+  const get = (key) => Array.isArray(aiFlags[key]) ? aiFlags[key] : [];
+  const cats = [];
+
+  if (skinTypes.includes('acne-prone')) {
+    const f = get('acne');
+    cats.push({ key:'acne', name:'Pore-clogging & heavy',
+      desc: f.length === 0 ? 'No pore-clogging or occlusive ingredients found.' : null,
+      flagged: f, score: score(f), weight: 1.5 });
+  }
+
+  if (skinTypes.includes('sensitive')) {
+    const f = get('sensitive');
+    cats.push({ key:'reactive', name:'Irritants & sensitisers',
+      desc: f.length === 0 ? 'No known irritants or sensitisers detected.' : null,
+      flagged: f, score: score(f), weight: 1.4 });
+  }
+
+  if (skinTypes.includes('dry')) {
+    const f = get('dry');
+    cats.push({ key:'dry', name:'Drying / stripping',
+      desc: f.length === 0 ? 'No harsh drying agents detected.' : null,
+      flagged: f, score: score(f), weight: 1.2 });
+  }
+
+  const allergens = get('allergens');
+  const allergenWeight = noSkinSelected ? 0.6 : 1.0;
+  cats.push({ key:'allergen', name:'EU allergens',
+    desc: allergens.length === 0 ? 'No EU-listed allergens detected.' : null,
+    flagged: allergens, score: score(allergens), weight: allergenWeight });
+
+  return cats;
 }
 
 function setLoading(main, sub) {
@@ -1298,6 +1212,10 @@ function showNotFound(name) {
           <strong style="color:var(--dark)">Option 2 — Try a different name</strong><br>
           Use the exact brand name + product name (e.g. "Drunk Elephant Protini" instead of "peptide cream").
         </div>
+        <div style="font-size:12.5px;color:rgba(26,20,16,0.6);line-height:1.6">
+          <strong style="color:var(--dark)">Option 3 — Clear cache and retry</strong><br>
+          <span style="color:var(--terra);cursor:pointer;text-decoration:underline" onclick="clearCacheAndRetry()">Tap here to clear the search cache</span> and try again — useful if a previous search returned a wrong result.
+        </div>
       </div>
     </div>
     <button class="new-scan" onclick="resetScan()">← Try Again</button>`;
@@ -1307,23 +1225,29 @@ function showNotFound(name) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // RENDER
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes }) {
+function renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes, noSkinWarning, dataSource }) {
   document.getElementById('loading').classList.remove('show');
 
-  const skinLabels = { 'clog-prone':'Clog-prone','sensitive':'Sensitive','dry':'Dry','oily':'Oily','rosacea':'Rosacea','eczema':'Eczema' };
+  const skinLabels = { 'acne-prone':'Acne-prone','sensitive':'Sensitive / Reactive','dry':'Dry','normal':'Normal' };
 
   const verdictMeta = {
-    safe:    { icon: '✓', title: 'Looks good',         desc: 'No significant concerns for your selected skin types.' },
-    caution: { icon: '!', title: 'Use with caution',   desc: 'A few ingredients worth watching for your skin.' },
-    avoid:   { icon: '✕', title: 'Not recommended',    desc: 'Several ingredients are problematic for your skin types.' },
+    safe:    { icon: '✓', title: 'Looks good',         desc: noSkinWarning ? 'No EU allergens detected.' : 'No significant concerns for your skin type.' },
+    caution: { icon: '!', title: 'Use with caution',   desc: noSkinWarning ? 'Some EU allergens present — check if you are sensitive to these.' : 'A few ingredients worth watching for your skin.' },
+    avoid:   { icon: '✕', title: 'Not recommended',    desc: noSkinWarning ? 'Multiple EU allergens detected.' : 'Several ingredients are problematic for your skin type.' },
   }[verdict];
 
   // Category rows — bar + plain-text flagged list
   const catHTML = cats.map(c => {
     const pct = Math.round((c.score / 5) * 100);
     const cls = `c${c.score}`;
-    const flagText = c.flagged.length
-      ? c.flagged.map(f => `<strong>${escHtml(f.name)}</strong>`).join(', ')
+    const flagHTML = c.flagged.length
+      ? c.flagged.map(f => {
+          const dot = f.severity === 'high'
+            ? `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--bad);margin-right:4px;vertical-align:middle;flex-shrink:0"></span>`
+            : `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--warn);margin-right:4px;vertical-align:middle;flex-shrink:0"></span>`;
+          const reason = f.reason ? `<span style="color:rgba(26,20,16,0.38);font-weight:400"> — ${escHtml(f.reason)}</span>` : '';
+          return `<div style="display:flex;align-items:baseline;gap:0;line-height:1.7">${dot}<strong style="font-weight:500">${escHtml(f.name)}</strong>${reason}</div>`;
+        }).join('')
       : null;
     return `
       <div class="cat-row">
@@ -1332,8 +1256,8 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
           <span class="cat-num ${cls}">${c.score} / 5</span>
         </div>
         <div class="cat-bar-track"><div class="cat-bar-fill ${cls}" style="width:${pct}%"></div></div>
-        ${flagText
-          ? `<div class="cat-flagged">${flagText}</div>`
+        ${flagHTML
+          ? `<div class="cat-flagged" style="margin-top:4px">${flagHTML}</div>`
           : `<div class="cat-ok">${escHtml(c.desc)}</div>`}
       </div>`;
   }).join('');
@@ -1341,7 +1265,7 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
   document.getElementById('results').innerHTML = `
     ${brand ? `<div class="r-brand">${escHtml(brand)}</div>` : ''}
     <div class="r-name">${escHtml(productName)}</div>
-    <div class="r-meta">${ingredients.length} ingredients · ${escHtml(source)}</div>
+    <div class="r-meta">${ingredients.length} ingredients · ${escHtml(source)} · <span style="color:${dataSource==='ai'?'var(--good)':'var(--warn)'}">${dataSource==='ai'?'AI-checked':'local database'}</span></div>
 
     <div class="verdict-banner ${verdict}">
       <div class="verdict-left">
@@ -1362,6 +1286,10 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
       ${skinTypes.length ? skinTypes.map(t=>`<span class="r-skin-pill">${skinLabels[t]||t}</span>`).join('') : '<span class="r-skin-pill">General</span>'}
     </div>
 
+    ${noSkinWarning ? `<div style="background:#FDF3E3;border-radius:10px;padding:12px 15px;margin-bottom:14px;font-size:12.5px;color:#9A6500;line-height:1.5">
+      <strong>No skin concern selected.</strong> Only EU allergens are being checked.
+      Select a skin type above for a full analysis.
+    </div>` : ''}
     <div class="cats">${catHTML}</div>
 
     <div class="ai-block">
@@ -1369,7 +1297,15 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
       <div id="aiText"><div class="ai-dots"><span class="ai-dot"></span><span class="ai-dot"></span><span class="ai-dot"></span></div></div>
     </div>
 
-    <button class="new-scan" onclick="resetScan()">← Scan another product</button>
+    <div style="display:flex;gap:9px;margin-top:4px">
+      <button class="new-scan" style="flex:1" onclick="resetScan()">← Scan another</button>
+      <button class="new-scan" style="flex:1;border-color:rgba(196,98,45,0.3);color:var(--terra)" onclick="reAnalyze()" title="Re-run with current skin type selection">Re-analyze</button>
+    </div>
+    <div style="font-size:10.5px;color:rgba(26,20,16,0.25);line-height:1.6;margin-top:14px;text-align:center;padding:0 4px">
+      Checks ~120 known problem ingredients. Unlisted ingredients are not evaluated.
+      Comedogenicity ratings based on Kligman scale. EU allergens per Regulation 1223/2009.
+      Not a substitute for dermatological advice.
+    </div>
   `;
   document.getElementById('results').classList.add('show');
 }
@@ -1380,7 +1316,45 @@ function resetScan() {
   document.getElementById('inputSection').style.display = '';
   selectedProduct = null; productInput.value = ''; productInput.focus();
   clearPhoto();
+  lastAnalysisData = null;
   window.scrollTo({ top:0, behavior:'smooth' });
+}
+// gap #4: re-run analysis on same product with current chip selection
+function reAnalyze() {
+  if (!lastAnalysisData) return;
+  const { productName, brand, ingredientsText, source } = lastAnalysisData;
+  document.getElementById('results').classList.remove('show');
+  document.getElementById('results').innerHTML = '';
+  document.getElementById('loading').classList.add('show');
+  runAnalysis(productName, brand, ingredientsText, source);
+  window.scrollTo({ top:0, behavior:'smooth' });
+}
+// ── markdownToHtml: lightweight markdown renderer for the Chemist's note ──
+// Handles: **bold**, *italic*, line breaks, and **Label:** prefix lines
+function markdownToHtml(text) {
+  // Escape HTML in the raw text first, then apply markdown transformations
+  // We escape char by char so we can selectively allow our own tags
+  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+  return text
+    .split('\n')
+    .map(line => {
+      line = line.trim();
+      if (!line) return null;                             // blank lines → skip
+      // Apply inline formatting to the line
+      line = esc(line)
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')   // **bold**
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>');               // *italic*
+      return `<p style="margin:0 0 6px">${line}</p>`;
+    })
+    .filter(Boolean)
+    .join('');
+}
+
+function clearCacheAndRetry() {
+  // gap #10: clear all search caches and return to input
+  Object.keys(_searchCache).forEach(k => delete _searchCache[k]);
+  resetScan();
 }
 function escHtml(s) {
   return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : '';
