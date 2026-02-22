@@ -297,6 +297,7 @@ function authHeaders() {
   return {
     'Content-Type':      'application/json',
     'anthropic-version': '2023-06-01',
+    'anthropic-beta':    'web-search-2025-03-05',
   };
 }
 
@@ -641,123 +642,91 @@ function getCachedSlug(q) {
 // full ingredient lists in their snippets — instead of asking Claude to
 // generate formatted output. Much more reliable.
 async function searchINCIBySnippet(query) {
-  // Return cached result immediately — avoids duplicate API calls
   const cached = cacheGet('inci', query);
-  if (cached) { console.log('searchINCIBySnippet: cache hit for', query); return cached; }
+  if (cached) return cached;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 22000);  // slightly longer for cold Workers
+  const timer = setTimeout(() => controller.abort(), 30000);
   try {
     const res = await fetch(apiUrl(), {
-      method: 'POST',
-      headers: authHeaders(),
-      signal: controller.signal,
+      method: 'POST', headers: authHeaders(), signal: controller.signal,
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 2000,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        tool_choice: { type: 'any' },  // force the search to actually run
+        model: 'claude-sonnet-4-6', max_tokens: 2000,
+        tools: [{ type: 'web_search_20250305', name: 'web_search', allowed_domains: ['incidecoder.com'] }],
         messages: [{ role: 'user', content:
-          'Search for: site:incidecoder.com/products ' + query.replace(/"/g, '') +
-          '\n\nFrom the search results, find the best matching product and extract its full ingredient list.' +
-          '\nThe ingredient list appears in the search snippet after "ingredients explained:"' +
-          '\n\nRespond with exactly these three lines, nothing else:' +
-          '\nPRODUCT: <full product name>' +
-          '\nBRAND: <brand name>' +
-          '\nINGREDIENTS: <full comma-separated ingredient list from the snippet>'
+          'Find "' + query.replace(/"/g, '') + '" on incidecoder.com and return its full ingredient list.' +
+          '\nRespond with exactly:\nPRODUCT: <full name>\nBRAND: <brand>\nINGREDIENTS: <comma-separated INCI list>'
         }],
       }),
     });
     clearTimeout(timer);
     const data = await res.json();
-    if (data.error) { console.error('API error:', data.error); return null; }
-
-    // Collect all text from the response (including after tool use)
-    const allText = (data.content || [])
-      .filter(b => b.type === 'text')
-      .map(b => b.text)
-      .join('\n');
-
-    // Also check tool_result blocks for raw snippet data as fallback
-    const toolResults = (data.content || [])
-      .filter(b => b.type === 'tool_result')
-      .map(b => typeof b.content === 'string' ? b.content : JSON.stringify(b.content))
-      .join('\n');
-
-    const fullText = allText || toolResults;
-    if (!fullText) return null;
-
-    const productMatch     = fullText.match(/PRODUCT:\s*(.+)/i);
-    const brandMatch       = fullText.match(/BRAND:\s*(.+)/i);
-    const ingredientsMatch = fullText.match(/INGREDIENTS:\s*([\s\S]+)/i);
-
-    if (!ingredientsMatch || ingredientsMatch[1].trim().length < 20) {
-      console.warn('searchINCIBySnippet: no ingredient line found. Response was:', fullText.slice(0, 300));
-      return null;
-    }
-
-    const result = {
-      productName: productMatch ? productMatch[1].trim() : query,
-      brand:       brandMatch   ? brandMatch[1].trim()   : '',
-      ingredients: ingredientsMatch[1].trim().replace(/\n[\s\S]*/,''),
-    };
-    cacheSet('inci', query, result);
-    return result;
+    if (data.error) { console.error('[inci] error:', data.error); return null; }
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+    console.log('[inci] response:', text.slice(0, 200));
+    return parseSearchResult(text, query);
   } catch(e) {
     clearTimeout(timer);
-    console.error('searchINCIBySnippet error:', e.message);
+    console.error('[inci] exception:', e.message);
     return null;
   }
 }
 
+function parseSearchResult(text, fallbackQuery) {
+  const productMatch     = text.match(/PRODUCT:\s*(.+)/i);
+  const brandMatch       = text.match(/BRAND:\s*(.+)/i);
+  const ingredientsMatch = text.match(/INGREDIENTS:\s*([\s\S]+)/i);
+  if (!ingredientsMatch || ingredientsMatch[1].trim().length < 20) {
+    console.warn('[search] no INGREDIENTS line. text was:', text.slice(0, 300));
+    return null;
+  }
+  const result = {
+    productName: productMatch ? productMatch[1].trim() : fallbackQuery,
+    brand:       brandMatch   ? brandMatch[1].trim()   : '',
+    ingredients: ingredientsMatch[1].trim().split('\n')[0],
+  };
+  cacheSet('inci', fallbackQuery, result);
+  return result;
+}
+
 // ── searchINCI: for the dropdown suggestions ──
-// Returns name+slug only (no ingredients yet — fetched on demand)
 async function searchINCI(query) {
-  // Cache hit → instant, no API needed
   const cachedSlug = getCachedSlug(query);
   if (cachedSlug) {
-    const name = cachedSlug.split('-')
-      .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
-      .replace(/\bTm\b/, '™');
-    return [{ name, brand: '', ingredientsText: '', img: '', source: 'inci', slug: cachedSlug }];
+    const name = cachedSlug.split('-').map(w => w.charAt(0).toUpperCase()+w.slice(1)).join(' ').replace(/\bTm\b/, '™');
+    return [{ name, brand:'', ingredientsText:'', img:'', source:'inci', slug: cachedSlug }];
   }
-
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
+  const timer = setTimeout(() => controller.abort(), 20000);
   try {
     const res = await fetch(apiUrl(), {
-      method: 'POST',
-      headers: authHeaders(),
-      signal: controller.signal,
+      method: 'POST', headers: authHeaders(), signal: controller.signal,
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 600,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        tool_choice: { type: 'any' },
+        model: 'claude-sonnet-4-6', max_tokens: 600,
+        tools: [{ type: 'web_search_20250305', name: 'web_search', allowed_domains: ['incidecoder.com'] }],
         messages: [{ role: 'user', content:
-          'Search for: site:incidecoder.com/products ' + query.replace(/"/g, '') +
-          '\n\nList up to 4 matching products from the search result URLs.' +
-          '\nEach URL is https://incidecoder.com/products/SLUG' +
-          '\nReturn ONLY a raw JSON array, no other text:' +
-          '\n[{"name":"Product Name","brand":"Brand","slug":"url-slug"}]' +
-          '\nReturn [] if no results.'
+          'Search incidecoder.com for: ' + query.replace(/"/g,'') +
+          '\nReturn up to 4 matching products as a raw JSON array only:\n[{"name":"...","brand":"...","slug":"url-slug"}]\nReturn [] if none.'
         }],
       }),
     });
     clearTimeout(timer);
     const data = await res.json();
     if (data.error) return [];
-    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
-    const clean = text.replace(/```json|```/gi, '').trim();
-    const match = clean.match(/\[[\s\S]*\]/);
-    if (!match) return [];
+    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+    return parseSlugList(text);
+  } catch(e) { clearTimeout(timer); return []; }
+}
+
+function parseSlugList(text) {
+  const clean = text.replace(/```json|```/gi, '').trim();
+  const match = clean.match(/\[[\s\S]*\]/);
+  if (!match) return [];
+  try {
     return JSON.parse(match[0])
       .filter(p => p.slug)
-      .map(p => ({ name: p.name || p.slug, brand: p.brand || '', ingredientsText: '', img: '', source: 'inci', slug: p.slug }));
-  } catch(e) {
-    clearTimeout(timer);
-    return [];
-  }
+      .map(p => ({ name: p.name||p.slug, brand: p.brand||'', ingredientsText:'', img:'', source:'inci', slug: p.slug }));
+  } catch(e) { return []; }
 }
 
 // ── fetchInciIngredients ──
@@ -1053,53 +1022,33 @@ async function doScan() {
   await runAnalysis(productName, brand, ingredientsText, source);
 }
 
-// ── googleIngredientsFallback: last-resort Google search for any product ──
+// ── googleIngredientsFallback: last-resort search for any product ──
 async function googleIngredientsFallback(query) {
   const cached = cacheGet('google', query);
   if (cached) return cached;
-
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 22000);
+  const timer = setTimeout(() => controller.abort(), 30000);
   try {
     const res = await fetch(apiUrl(), {
-      method: 'POST',
-      headers: authHeaders(),
-      signal: controller.signal,
+      method: 'POST', headers: authHeaders(), signal: controller.signal,
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1500,
+        model: 'claude-sonnet-4-6', max_tokens: 1500,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        tool_choice: { type: 'any' },
         messages: [{ role: 'user', content:
-          'Search for: ' + query.replace(/"/g,'') + ' ingredients skincare' +
-          '\n\nFind the full INCI ingredient list for this cosmetic product.' +
-          '\nLook for sources like INCIDecoder, INCI Beauty, Beautypedia, the brand website, or Sephora.' +
-          '\n\nRespond with exactly three lines, nothing else:' +
-          '\nPRODUCT: <full official product name>' +
-          '\nBRAND: <brand name>' +
-          '\nINGREDIENTS: <full comma-separated INCI ingredient list>'
+          'Find the full INCI ingredient list for: ' + query.replace(/"/g,'') +
+          '\nSearch INCIDecoder, the brand site, or Sephora.' +
+          '\nRespond with exactly:\nPRODUCT: <n>\nBRAND: <brand>\nINGREDIENTS: <comma-separated INCI list>'
         }],
       }),
     });
     clearTimeout(timer);
     const data = await res.json();
     if (data.error) return null;
-    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
-    const productMatch = text.match(/PRODUCT:\s*(.+)/i);
-    const brandMatch   = text.match(/BRAND:\s*(.+)/i);
-    const ingMatch     = text.match(/INGREDIENTS:\s*([\s\S]+)/i);
-    if (!ingMatch || ingMatch[1].trim().length < 20) return null;
-    const result = {
-      productName: productMatch ? productMatch[1].trim() : query,
-      brand:       brandMatch   ? brandMatch[1].trim()   : '',
-      ingredients: ingMatch[1].trim().split('\n')[0],
-    };
-    cacheSet('google', query, result);
+    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+    const result = parseSearchResult(text, query);
+    if (result) cacheSet('google', query, result);
     return result;
-  } catch(e) {
-    clearTimeout(timer);
-    return null;
-  }
+  } catch(e) { clearTimeout(timer); return null; }
 }
 
 // ── parseIngredients: split INCI string into individual ingredient names ──
