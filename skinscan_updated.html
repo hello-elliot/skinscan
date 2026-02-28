@@ -1339,6 +1339,8 @@ function mapBackendProduct(p) {
     img: p.imageUrl || '',
     ingredientsText: p.ingredientsText || '',
     ingredientsStatus: p.ingredientsStatus || (p.ingredientsText ? 'available' : 'missing'),
+    ingredientResolutionState: p.ingredientResolutionState || (p.ingredientsText ? 'available' : 'unavailable'),
+    ingredientJobId: p.ingredientJobId || p.productId || '',
     confidence: p.confidence || 'low',
     needsConfirmation: !!p.needsConfirmation,
     source: 'backend-index'
@@ -1384,7 +1386,9 @@ async function resolveProductFromBackend(query) {
     const mapped = {
       state: data.state,
       normalizedQuery: data.normalized_query || normalizeQuery(query),
-      appliedFuzzyCorrection: Array.isArray(data.applied_corrections) && data.applied_corrections.length > 0
+      appliedFuzzyCorrection: Array.isArray(data.applied_corrections) && data.applied_corrections.length > 0,
+      ingredientResolutionState: data.ingredientResolutionState || '',
+      ingredientJobId: data.ingredientJobId || ''
     };
     if (data.product) mapped.product = mapBackendProduct(data.product);
     if (Array.isArray(data.candidates)) mapped.candidates = data.candidates.map(mapBackendProduct).filter(Boolean);
@@ -1401,6 +1405,11 @@ async function resolveProduct(query, options = {}) {
 async function enrichCandidateIngredients(candidate) {
   const q = [candidate.brand, candidate.name].filter(Boolean).join(' ').trim() || candidate.name;
   if (!q) return candidate;
+  if (candidate.source === 'backend-index' && candidate.productId) {
+    const backendResolved = await tryBackendIngredientResolution(candidate, q);
+    if (backendResolved?.ingredientsText) return backendResolved;
+    return candidate;
+  }
   if (candidate.source === 'inci' && candidate.slug) {
     const inci = await fetchInciIngredients(candidate.slug);
     if (inci?.ingredients) {
@@ -1413,28 +1422,85 @@ async function enrichCandidateIngredients(candidate) {
   }
   return candidate;
 }
-function showProductNeedsIngredients(product) {
-  if (product?.productId) {
-    fetch(resolverUrl('/resolver/ingredients/enrich'), {
+async function pollIngredientsStatus(product, maxWaitMs = 8000, intervalMs = 1500) {
+  if (!product?.productId) return null;
+  const started = Date.now();
+  while (Date.now() - started <= maxWaitMs) {
+    try {
+      const res = await fetch(resolverUrl(`/resolver/products/${encodeURIComponent(product.productId)}/ingredients-status`));
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.state === 'available' && data.ingredientsText) {
+          return {
+            ...product,
+            ingredientsText: data.ingredientsText,
+            ingredientsStatus: 'available',
+            ingredientResolutionState: 'available'
+          };
+        }
+        if (data?.state === 'unavailable') return null;
+      }
+    } catch (_) {}
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  return null;
+}
+async function tryBackendIngredientResolution(product, queryText = '') {
+  if (!product?.productId) return null;
+  try {
+    await fetch(resolverUrl('/resolver/enrich-ingredients'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ productId: product.productId })
-    }).catch(() => {});
+      body: JSON.stringify({
+        productId: product.productId,
+        query: queryText || [product.brand, product.name].filter(Boolean).join(' ').trim(),
+        locale: navigator.language || 'en-US',
+        region: ((navigator.language || 'en-US').split('-')[1] || '').toUpperCase()
+      })
+    });
+  } catch (_) {}
+  return pollIngredientsStatus(product, 8000, 1500);
+}
+async function showProductNeedsIngredients(product, options = {}) {
+  let resolved = null;
+  if (product?.productId && !options.skipAutoTry) {
+    resolved = await tryBackendIngredientResolution(product);
+    if (resolved?.ingredientsText) {
+      trackEvent('analysis_autostart_after_enrichment', { productId: product.productId, name: resolved.name || product.name });
+      await runAnalysis(resolved.name || product.name, resolved.brand || product.brand || '', resolved.ingredientsText, 'resolver', resolved.img || product.img || '', resolved.category || product.category || '');
+      return;
+    }
   }
   document.getElementById('loading').classList.remove('show');
   document.getElementById('results').innerHTML = `
     <div class="not-found">
-      <div class="not-found-title">Ingredients not available</div>
+      <div class="not-found-title">Ingredients not available yet</div>
       <div class="not-found-desc">
         <strong>${escHtml([product.brand, product.name].filter(Boolean).join(' ') || 'Selected product')}</strong><br>
-        We found this product, but couldn't retrieve a complete ingredient list yet.
+        We found this product and tried retrieving ingredients, but couldn't get a complete list yet.
       </div>
       <div style="margin-top:10px;font-size:12.5px;color:rgba(26,20,16,0.65)">
-        Paste the ingredient list to analyze it now.
+        You can retry fetch, or paste the ingredient list to analyze now.
       </div>
     </div>
+    <button class="new-scan alt" onclick="retryIngredientFetch()">Try fetch again</button>
+    <div style="height:8px"></div>
     <button class="new-scan" onclick="resetScan()">← Try another search</button>`;
   document.getElementById('results').classList.add('show');
+}
+async function retryIngredientFetch() {
+  if (!selectedProduct?.productId) return;
+  document.getElementById('results').classList.remove('show');
+  document.getElementById('loading').classList.add('show');
+  setLoading('Found product. Retrieving ingredients…', 'This usually takes a few seconds');
+  const resolved = await tryBackendIngredientResolution(selectedProduct);
+  if (resolved?.ingredientsText) {
+    trackEvent('analysis_autostart_after_enrichment', { productId: selectedProduct.productId, name: resolved.name || selectedProduct.name });
+    await runAnalysis(resolved.name || selectedProduct.name, resolved.brand || selectedProduct.brand || '', resolved.ingredientsText, 'resolver', resolved.img || selectedProduct.img || '', resolved.category || selectedProduct.category || '');
+    return;
+  }
+  document.getElementById('loading').classList.remove('show');
+  showProductNeedsIngredients(selectedProduct, { skipAutoTry: true });
 }
 
 
@@ -1817,6 +1883,9 @@ async function doScan() {
       showSuggestions([resolution.product], { confirmMode: true });
       trackEvent('product_confirmation_shown', { query: inputVal, confidence: 'medium' });
       return;
+    }
+    if (resolution.product?.ingredientResolutionState === 'resolving') {
+      setLoading('Found product. Retrieving ingredients…', 'This usually takes a few seconds');
     }
     const resolved = await enrichCandidateIngredients(resolution.product);
     if (!resolved?.ingredientsText) {

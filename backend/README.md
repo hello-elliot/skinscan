@@ -46,19 +46,39 @@ Output:
     "productId": "estee_lauder_anr_serum",
     "brand": "Estee Lauder",
     "name": "Advanced Night Repair Synchronized Multi-Recovery Complex Serum",
-    "ingredientsStatus": "missing"
+    "ingredientsStatus": "missing",
+    "ingredientResolutionState": "resolving",
+    "ingredientJobId": "estee_lauder_anr_serum"
   },
   "normalized_query": "estee lauder advanced night repair serum",
   "applied_corrections": []
 }
 ```
 
-### `POST /resolver/ingredients/enrich`
+When `ingredientsStatus` is missing, backend starts async enrichment automatically.
+
+### `POST /resolver/enrich-ingredients`
 
 Input:
 
 ```json
-{ "productId": "estee_lauder_anr_serum" }
+{ "productId": "estee_lauder_anr_serum", "query": "estee lauder advanced night repair serum" }
+```
+
+Legacy alias still supported: `POST /resolver/ingredients/enrich`.
+
+### `GET /resolver/products/:productId/ingredients-status`
+
+Returns:
+
+```json
+{
+  "productId": "estee_lauder_anr_serum",
+  "state": "available",
+  "ingredientsStatus": "available",
+  "ingredientsText": "Aqua, Bifida Ferment Lysate, ...",
+  "updatedAt": "2026-02-28T16:00:00.000Z"
+}
 ```
 
 ### `GET /resolver/coverage-metrics`
@@ -70,3 +90,5 @@ Returns index stats, miss queue, and 24h resolver KPI snapshot.
 - `backend/data/product_index.json` canonical product index
 - `backend/data/coverage_miss_queue.json` miss-driven queue
 - `backend/data/resolver_metrics.json` telemetry aggregate events
+- `backend/data/source_cache.json` file-backed source cache (24h TTL)
+- `backend/data/canary_queries.json` canary search queries for regression checks
