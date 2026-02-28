@@ -25,18 +25,19 @@
       "line": "Advanced Night Repair",
       "category": "Serum",
       "image_url": "",
-      "ingredients_status": "missing",
-      "ingredients_text": "",
+      "ingredients_status": "available",
+      "ingredients_text": "Water/Aqua/Eau, Bifida Ferment Lysate, PEG-8, Propanediol, Bis-PEG-18 Methyl Ether Dimethyl Silane, Methyl Gluceth-20, Glycereth-26, PEG-75, Butylene Glycol, Adansonia Digitata Seed Extract, Tripeptide-32, Sodium Hyaluronate, Yeast Extract/Faex/Extrait De Levure, Lactobacillus Ferment, Cola Acuminata (Kola) Seed Extract, Anthemis Nobilis (Chamomile) Flower Extract, Hydrolyzed Algin, Pantethine, Caffeine, Lecithin, Sodium RNA, Bisabolol, Squalane, Glycerin, Oleth-3 Phosphate, Caprylyl Glycol, Oleth-3, Oleth-5, Choleth-24, Hydrogenated Lecithin, Jojoba Wax PEG-120 Esters, Ceteth-24, Tocopheryl Acetate, Carbomer, Triethanolamine, Tetrasodium EDTA, BHT, Xanthan Gum, Potassium Sorbate, Disodium EDTA, Phenoxyethanol, Red 4 (CI 14700), Yellow 5 (CI 19140)",
       "source_priority": 100,
       "confidence_metadata": {
         "quality": "high",
         "freshness": "daily",
-        "updated_at": "2026-02-28T00:00:00.000Z",
+        "updated_at": "2026-02-28T16:43:10.137Z",
         "popularity": 0.99
       },
-      "ingredients_source": "",
-      "ingredients_last_verified_at": "",
-      "ingredients_version_hash": ""
+      "ingredients_source": "curated_trusted",
+      "ingredients_last_verified_at": "2026-02-28T16:43:10.118Z",
+      "ingredients_version_hash": "725d4dec007d9f66ecca64113bf722cfcc40a5c3",
+      "ingredients_confidence": 0.92
     },
     {
       "product_id": "dr_althea_345_relief_cream",
@@ -58,18 +59,19 @@
       "line": "345",
       "category": "Cream",
       "image_url": "",
-      "ingredients_status": "missing",
-      "ingredients_text": "",
+      "ingredients_status": "available",
+      "ingredients_text": "Water, Melaleuca Alternifolia (Tea Tree) Leaf Water, Butylene Glycol, 1,2-Hexanediol, Propanediol, Glycerin, Polyquaternium-51, Beta-Glucan, C14-22 Alcohols, C12-20 Alkyl Glucoside, Vinyl Dimethicone, Niacinamide, Dicaprylyl Carbonate, Tocopherol, Panthenol, Caprylic/Capric Triglyceride, Hydrogenated Polydecene, Ammonium Acryloyldimethyltaurate/VP Copolymer, Polymethylsilsesquioxane, Caprylyl Methicone, Coptis Japonica Root Extract, Hydroxyacetophenone, Acrylates/C10-30 Alkyl Acrylate Crosspolymer, Ethylhexylglycerin, Tromethamine, Sodium Stearoyl Glutamate, Sodium Hyaluronate, Centella Asiatica Leaf Water, Centella Asiatica Extract, Sodium DNA, Disodium EDTA, Sodium Phytate, Tannic Acid, Camellia Sinensis Leaf Water, Hydrolyzed Hyaluronic Acid, Resveratrol, Madecassoside, Ceramide NP",
       "source_priority": 95,
       "confidence_metadata": {
         "quality": "high",
         "freshness": "daily",
-        "updated_at": "2026-02-28T00:00:00.000Z",
+        "updated_at": "2026-02-28T16:43:10.137Z",
         "popularity": 0.92
       },
-      "ingredients_source": "",
-      "ingredients_last_verified_at": "",
-      "ingredients_version_hash": ""
+      "ingredients_source": "curated_trusted",
+      "ingredients_last_verified_at": "2026-02-28T16:43:10.137Z",
+      "ingredients_version_hash": "b22cff89b35fad9896abd27130176ba2df946c92",
+      "ingredients_confidence": 0.92
     },
     {
       "product_id": "dr_althea_365_relief_essence",
