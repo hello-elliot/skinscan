@@ -1142,14 +1142,17 @@ function parseSearchResult(text, fallbackQuery) {
   const productMatch     = text.match(/PRODUCT:\s*(.+)/i);
   const brandMatch       = text.match(/BRAND:\s*(.+)/i);
   const ingredientsMatch = text.match(/INGREDIENTS:\s*([\s\S]+)/i);
-  if (!ingredientsMatch || ingredientsMatch[1].trim().length < 20) {
-    console.warn('[search] no INGREDIENTS line. text was:', text.slice(0, 300));
-    return null;
+  let ingredients = ingredientsMatch ? ingredientsMatch[1].trim().split('\n')[0] : '';
+  if (!ingredients || ingredients.length < 20) {
+    // Fallback parse for prose snippets containing ingredient blocks.
+    const loose = text.match(/ingredients?\s*[:\-]?\s*([A-Za-z0-9\-\(\)\/,\.\s]{80,2500})/i);
+    if (loose && loose[1]) ingredients = loose[1].trim().split('\n')[0];
   }
+  if (!ingredients || ingredients.length < 20) return null;
   const result = {
     productName: productMatch ? productMatch[1].trim() : fallbackQuery,
     brand:       brandMatch   ? brandMatch[1].trim()   : '',
-    ingredients: ingredientsMatch[1].trim().split('\n')[0],
+    ingredients,
   };
   cacheSet('inci', fallbackQuery, result);
   return result;
@@ -1419,9 +1422,28 @@ async function enrichCandidateIngredients(candidate) {
   }
   const web = await googleIngredientsFallback(q);
   if (web?.ingredients) {
-    return { ...candidate, name: web.productName || candidate.name, brand: web.brand || candidate.brand || '', ingredientsText: web.ingredients, ingredientsStatus: 'available' };
+    const enriched = { ...candidate, name: web.productName || candidate.name, brand: web.brand || candidate.brand || '', ingredientsText: web.ingredients, ingredientsStatus: 'available' };
+    await persistResolvedIngredients(enriched, 'federated-web');
+    return enriched;
   }
   return candidate;
+}
+async function persistResolvedIngredients(product, source = 'manual') {
+  if (!product?.productId || !product?.ingredientsText) return;
+  try {
+    await fetch(resolverUrl('/resolver/enrich-ingredients'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        productId: product.productId,
+        ingredientsText: product.ingredientsText,
+        ingredientsSource: source,
+        query: [product.brand, product.name].filter(Boolean).join(' ').trim(),
+        locale: navigator.language || 'en-US',
+        region: ((navigator.language || 'en-US').split('-')[1] || '').toUpperCase()
+      })
+    });
+  } catch (_) {}
 }
 async function pollIngredientsStatus(product, maxWaitMs = 8000, intervalMs = 1500) {
   if (!product?.productId) return null;
@@ -1916,29 +1938,52 @@ async function doScan() {
 async function googleIngredientsFallback(query) {
   const cached = cacheGet('google', query);
   if (cached) return cached;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
-  try {
-    const res = await fetch(apiUrl(), {
-      method: 'POST', headers: authHeaders(), signal: controller.signal,
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6', max_tokens: 1500,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        messages: [{ role: 'user', content:
-          'Find the full INCI ingredient list for: ' + query.replace(/"/g,'') +
-          '\nPrefer official brand pages and major retailers.' +
-          '\nRespond with exactly:\nPRODUCT: <n>\nBRAND: <brand>\nINGREDIENTS: <comma-separated INCI list>'
-        }],
-      }),
-    });
-    clearTimeout(timer);
-    const data = await res.json();
-    if (data.error) return null;
-    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
-    const result = parseSearchResult(text, query);
-    if (result) cacheSet('google', query, result);
-    return result;
-  } catch(e) { clearTimeout(timer); return null; }
+  const allowedDomains = [
+    'incidecoder.com',
+    'world.openbeautyfacts.org',
+    'sephora.com',
+    'ulta.com',
+    'douglas.com',
+    'douglas.de',
+    'iciparisxl.com',
+    'yesstyle.com',
+    'stylevana.com',
+    'amazon.com',
+    'cultbeauty.com'
+  ];
+  const prompts = [
+    'Find the exact full INCI ingredient list for: ',
+    'Find the ingredient list from any trusted beauty retailer or official brand page for: ',
+    'Find this product and return ingredients only for: '
+  ];
+
+  for (const prefix of prompts) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 22000);
+    try {
+      const res = await fetch(apiUrl(), {
+        method: 'POST', headers: authHeaders(), signal: controller.signal,
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6', max_tokens: 1700,
+          tools: [{ type: 'web_search_20250305', name: 'web_search', allowed_domains: allowedDomains }],
+          messages: [{ role: 'user', content:
+            prefix + query.replace(/"/g, '') +
+            '\nReturn strictly:\nPRODUCT: <n>\nBRAND: <brand>\nINGREDIENTS: <comma-separated INCI list>\nIf unavailable, output INGREDIENTS: NOT_FOUND'
+          }],
+        }),
+      });
+      clearTimeout(timer);
+      const data = await res.json();
+      if (data.error) continue;
+      const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
+      const result = parseSearchResult(text, query);
+      if (result?.ingredients && result.ingredients.toUpperCase() !== 'NOT_FOUND') {
+        cacheSet('google', query, result);
+        return result;
+      }
+    } catch(e) { clearTimeout(timer); }
+  }
+  return null;
 }
 
 // ── parseIngredients: split INCI string into individual ingredient names ──

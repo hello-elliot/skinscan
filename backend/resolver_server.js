@@ -950,6 +950,8 @@ async function handleEnrichIngredients(req, res) {
   const body = await readBody(req);
   const productId = String(body.productId || '').trim();
   const query = String(body.query || '').trim();
+  const ingredientsText = String(body.ingredientsText || '').trim();
+  const ingredientsSource = String(body.ingredientsSource || 'manual').trim();
   const locale = String(body.locale || '').trim();
   const region = String(body.region || '').trim();
   const forceRetry = !!body.forceRetry;
@@ -964,6 +966,43 @@ async function handleEnrichIngredients(req, res) {
   if (!product) {
     upsertMiss(productId, normalizeText(productId), 'no_ingredient_block_found', { reason: 'missing_product_id' });
     sendJson(res, 404, { ok: false, reason: 'missing_product' });
+    return;
+  }
+
+  if (ingredientsText) {
+    const normalizedIngredients = normalizeIngredientText(ingredientsText);
+    const quality = scoreIngredientCandidate(normalizedIngredients);
+    if (!quality.valid) {
+      sendJson(res, 400, { ok: false, error: 'invalid_ingredients_text', reason: quality.reason });
+      return;
+    }
+    product.ingredients_text = normalizedIngredients;
+    product.ingredients_status = 'available';
+    product.ingredients_source = ingredientsSource || 'manual';
+    product.ingredients_last_verified_at = nowIso();
+    product.ingredients_version_hash = hashText(normalizedIngredients);
+    product.ingredients_confidence = quality.confidence;
+    product.confidence_metadata = {
+      ...(product.confidence_metadata || {}),
+      freshness: 'daily',
+      updated_at: nowIso()
+    };
+    writeIndex(index);
+    withJobState(productId, { state: 'available', done: true, lastError: '' });
+    pushMetric('ingredient_resolve_succeeded', {
+      productId,
+      source: product.ingredients_source,
+      duration_ms: 0,
+      mode: 'manual_upsert'
+    });
+    sendJson(res, 200, {
+      ok: true,
+      productId,
+      ingredientResolutionState: 'available',
+      ingredientJobId: productId,
+      ingredientFailureStage: '',
+      attemptCount: ingredientJobs.get(productId)?.attemptCount || 0
+    });
     return;
   }
 

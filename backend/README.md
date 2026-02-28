@@ -69,10 +69,20 @@ When `ingredientsStatus` is missing, backend runs a hybrid enrichment:
 Input:
 
 ```json
-{ "productId": "estee_lauder_anr_serum", "query": "estee lauder advanced night repair serum" }
+{ "productId": "estee_lauder_anr_serum", "query": "estee lauder advanced night repair serum", "forceRetry": false }
 ```
 
 Legacy alias still supported: `POST /resolver/ingredients/enrich`.
+
+You can also upsert already-resolved ingredients:
+
+```json
+{
+  "productId": "estee_lauder_anr_serum",
+  "ingredientsText": "Water, Bifida Ferment Lysate, ...",
+  "ingredientsSource": "federated-web"
+}
+```
 
 ### `GET /resolver/products/:productId/ingredients-status`
 
