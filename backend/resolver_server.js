@@ -687,10 +687,21 @@ function classify(ranked, options = {}) {
     !weakBrandSignal
   );
   const exactHigh = highQuality && (top.exactNameMatch || top.nameSimilarity >= 0.92);
+  const unknownBrandCandidates = rankedWithGaps
+    .filter(item => item.nameSimilarity >= 0.52 || item.brandSimilarity >= 0.52 || item.score >= 0.72)
+    .slice(0, 7);
 
-  if (unknownBrandLikely && weakBrandSignal) return asCandidateList(rankedWithGaps, 'unknown_brand');
+  if (unknownBrandLikely && weakBrandSignal) {
+    if (!unknownBrandCandidates.length) {
+      return { state: 'candidate_list', decisionReason: 'unknown_brand', autoResolved: false, candidates: [] };
+    }
+    return asCandidateList(unknownBrandCandidates, 'unknown_brand');
+  }
   if (strictBrandGateEnabled && strictLowBrandSignal && top.nameSimilarity < 0.9) {
-    return asCandidateList(rankedWithGaps, 'unknown_brand');
+    if (!unknownBrandCandidates.length) {
+      return { state: 'candidate_list', decisionReason: 'unknown_brand', autoResolved: false, candidates: [] };
+    }
+    return asCandidateList(unknownBrandCandidates, 'unknown_brand');
   }
   if (topBrandMismatch) return asCandidateList(rankedWithGaps, 'brand_mismatch');
   if (ambiguousTop) return asCandidateList(rankedWithGaps, 'low_gap');
@@ -1082,9 +1093,25 @@ function ensureProductSchema(product) {
 function quickEnrich(normalizedQuery) {
   const catalog = readCatalog();
   let changed = false;
+  const query = normalizeText(normalizedQuery || '');
+  const isStrongSeedMatch = (seed) => {
+    if (!query) return false;
+    const strongFields = [
+      seed.brand_canonical,
+      seed.name_canonical,
+      ...(seed.brand_aliases || []),
+      ...(seed.name_aliases || [])
+    ]
+      .map(normalizeText)
+      .filter(Boolean)
+      .filter(value => value.length >= 5);
+
+    if (strongFields.some(value => query.includes(value) || value.includes(query))) return true;
+    const baseScore = overlapScore(query, `${seed.brand_canonical || ''} ${seed.name_canonical || ''}`);
+    return baseScore >= 0.62;
+  };
   QUICK_ENRICH_CATALOG.forEach(seed => {
-    const seedTexts = listProductTexts(seed).map(normalizeText);
-    if (!seedTexts.some(t => t && (normalizedQuery.includes(t) || t.includes(normalizedQuery)))) return;
+    if (!isStrongSeedMatch(seed)) return;
     if (!catalog.products.some(p => p.product_id === seed.product_id)) {
       catalog.products.push(asCatalogProduct(seed));
       changed = true;

@@ -1145,6 +1145,12 @@ function hideAddProductCapture() {
   addProductPanelEl.innerHTML = '';
 }
 
+function showCandidateStatusMessage(text) {
+  suggestionsEl._products = [];
+  suggestionsEl.innerHTML = `<div class="sug-status"><span>${escHtml(text)}</span></div>`;
+  suggestionsEl.classList.add('show');
+}
+
 async function pollIngestionJob(jobId, query) {
   const startedAt = Date.now();
   while (Date.now() - startedAt <= 18000) {
@@ -1248,6 +1254,16 @@ async function triggerSuggest(query) {
         selectionContext: 'suggestions',
         decisionReason: resolution.decisionReason || ''
       }
+    });
+    setSearchState('results', { query });
+    return;
+  }
+  if (resolution.state === 'candidate_list' && resolution.decisionReason === 'unknown_brand') {
+    showCandidateStatusMessage('No close match yet. Add a product URL below for fast indexing.');
+    showAddProductCapture({
+      query,
+      normalizedQuery: resolution.normalizedQuery || normalizeQuery(query),
+      decisionReason: 'unknown_brand'
     });
     setSearchState('results', { query });
     return;
@@ -2192,15 +2208,26 @@ async function doScan() {
     if (resolution.state === 'candidate_list') {
       document.getElementById('loading').classList.remove('show');
       document.getElementById('inputSection').style.display = '';
-      showSuggestions(resolution.candidates || [], {
-        confirmMode: false,
-        meta: {
+      if (resolution.candidates?.length) {
+        showSuggestions(resolution.candidates || [], {
+          confirmMode: false,
+          meta: {
+            query: inputVal,
+            normalizedQuery: resolution.normalizedQuery || normalizeQuery(inputVal),
+            selectionContext: 'search',
+            decisionReason: resolution.decisionReason || ''
+          }
+        });
+      } else if (resolution.decisionReason === 'unknown_brand') {
+        showCandidateStatusMessage('No close match yet. Add a product URL below for fast indexing.');
+        showAddProductCapture({
           query: inputVal,
           normalizedQuery: resolution.normalizedQuery || normalizeQuery(inputVal),
-          selectionContext: 'search',
-          decisionReason: resolution.decisionReason || ''
-        }
-      });
+          decisionReason: 'unknown_brand'
+        });
+      } else {
+        setSearchState('empty', { query: inputVal });
+      }
       trackEvent('search_state_changed', { state: 'candidate_list', decisionReason: resolution.decisionReason || '' });
       return;
     }
