@@ -1,64 +1,46 @@
-# Dynamic Hosting Setup (GitLab Pages + Resolver API)
+# Dynamic Hosting Setup (Render only, auto-deploy from GitHub)
 
-This project is split into:
+Use Render for both backend and frontend so you get one-time setup and automatic updates on every push.
 
-- Static frontend: GitLab Pages
-- Dynamic backend API: Render (`backend/resolver_server.js`)
+## 1) Create services from Blueprint
 
-## 1) Deploy backend API on Render
+1. In Render, click `New` -> `Blueprint`.
+2. Connect repo: `hello-elliot/skinscan`.
+3. Choose branch: `codex/coverage-reliability-backend` (or `main` after merge).
+4. Render reads [render.yaml](/Users/ksenia.zvereva/Documents/New%20project/render.yaml) and creates:
+   - `skinscan-resolver-api` (backend API)
+   - `skinscan-frontend` (public static app)
 
-Option A: Blueprint
+## 2) Wire frontend to backend once
 
-1. In Render, create a **Blueprint** from this repo/branch.
-2. Use [render.yaml](/Users/ksenia.zvereva/Documents/New%20project/render.yaml).
-3. Deploy service `skinscan-resolver-api`.
-4. Copy resulting API URL, e.g.:
-   `https://skinscan-resolver-api.onrender.com`
+After first deploy:
 
-Option B: Manual Web Service
+1. Open backend service URL (example: `https://skinscan-3bgp.onrender.com`).
+2. Open frontend service `Environment`.
+3. Set `RESOLVER_API_URL` to backend URL.
+4. Trigger manual redeploy for frontend once.
 
-- Runtime: Node
-- Start command:
-  `node backend/resolver_server.js`
-- Health check path:
-  `/healthz`
-- Env:
-  - `RESOLVER_HOST=0.0.0.0`
+From then on, every GitHub push to the connected branch auto-deploys both services.
 
-## 2) Configure GitLab Pages frontend
+## 3) Public URLs
 
-CI is defined in [.gitlab-ci.yml](/Users/ksenia.zvereva/Documents/New%20project/.gitlab-ci.yml) and builds from:
+- Frontend (share this): `https://<frontend-service>.onrender.com`
+- Backend API:
+  - `GET /healthz`
+  - `POST /resolver/products`
+  - `GET /resolver/coverage-metrics`
 
-- [scripts/build_pages.sh](/Users/ksenia.zvereva/Documents/New%20project/scripts/build_pages.sh)
-- source HTML:
-  [forks/skinscan_current_working.html](/Users/ksenia.zvereva/Documents/New%20project/forks/skinscan_current_working.html)
+## 4) Verify end-to-end
 
-Set GitLab CI/CD variable:
-
-- Key: `RESOLVER_API_URL`
-- Value: your Render URL, e.g. `https://skinscan-resolver-api.onrender.com`
-- Scope: project (optionally protected/masked)
-
-Push branch and run pipeline. Pages artifact publishes `public/index.html`.
-
-## 3) Verify end-to-end
-
-1. Open GitLab Pages URL
+1. Open frontend URL.
 2. Search:
    - `estee lauder advanced night repair serum`
    - `dr althea 365`
-3. Confirm API is used:
-   - Devtools Network should show request to:
-     `/resolver/products`
-4. Check backend KPI endpoint:
-   - `GET https://<resolver-host>/resolver/coverage-metrics`
+3. In browser Network tab, verify calls to:
+   - `https://<backend>/resolver/products`
 
-## 4) Daily enrichment
-
-For now, enrichment runs manually:
+## 5) Daily enrichment (manual for now)
 
 ```bash
 node backend/daily_enrichment.js
 ```
-
-Later you can schedule this via Render Cron Job using same repository.

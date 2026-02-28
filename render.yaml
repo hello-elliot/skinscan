@@ -14,3 +14,15 @@ services:
         value: production
       - key: RESOLVER_HOST
         value: 0.0.0.0
+  - type: web
+    name: skinscan-frontend
+    runtime: static
+    plan: free
+    region: frankfurt
+    branch: codex/coverage-reliability-backend
+    rootDir: .
+    buildCommand: "bash scripts/build_pages.sh"
+    staticPublishPath: public
+    envVars:
+      - key: RESOLVER_API_URL
+        sync: false
