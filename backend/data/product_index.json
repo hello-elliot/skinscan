@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "last_updated": "2026-02-28T00:00:00.000Z",
+  "products": [
+    {
+      "product_id": "estee_lauder_anr_serum",
+      "brand_canonical": "Estee Lauder",
+      "name_canonical": "Advanced Night Repair Synchronized Multi-Recovery Complex Serum",
+      "name_aliases": [
+        "advanced night repair",
+        "advanced night repair serum",
+        "anr serum",
+        "synchronized multi-recovery complex",
+        "night repair serum"
+      ],
+      "brand_aliases": [
+        "estee lauder",
+        "estee",
+        "el"
+      ],
+      "line": "Advanced Night Repair",
+      "category": "Serum",
+      "image_url": "",
+      "ingredients_status": "missing",
+      "ingredients_text": "",
+      "source_priority": 100,
+      "confidence_metadata": {
+        "quality": "high",
+        "freshness": "daily",
+        "updated_at": "2026-02-28T00:00:00.000Z",
+        "popularity": 0.99
+      }
+    },
+    {
+      "product_id": "dr_althea_345_relief_cream",
+      "brand_canonical": "Dr. Althea",
+      "name_canonical": "345 Relief Cream",
+      "name_aliases": [
+        "dr althea 345",
+        "345 relief cream",
+        "dr althea relief cream",
+        "345 cream"
+      ],
+      "brand_aliases": [
+        "dr althea",
+        "dr. althea",
+        "althea"
+      ],
+      "line": "345",
+      "category": "Cream",
+      "image_url": "",
+      "ingredients_status": "missing",
+      "ingredients_text": "",
+      "source_priority": 95,
+      "confidence_metadata": {
+        "quality": "high",
+        "freshness": "daily",
+        "updated_at": "2026-02-28T00:00:00.000Z",
+        "popularity": 0.92
+      }
+    },
+    {
+      "product_id": "dr_althea_365_relief_essence",
+      "brand_canonical": "Dr. Althea",
+      "name_canonical": "365 Relief Essence",
+      "name_aliases": [
+        "dr althea 365",
+        "365 relief essence",
+        "dr althea 365 essence",
+        "365 essence"
+      ],
+      "brand_aliases": [
+        "dr althea",
+        "dr. althea",
+        "althea"
+      ],
+      "line": "365",
+      "category": "Essence",
+      "image_url": "",
+      "ingredients_status": "missing",
+      "ingredients_text": "",
+      "source_priority": 94,
+      "confidence_metadata": {
+        "quality": "medium",
+        "freshness": "daily",
+        "updated_at": "2026-02-28T00:00:00.000Z",
+        "popularity": 0.85
+      }
+    },
+    {
+      "product_id": "la_roche_posay_toleriane_double_repair",
+      "brand_canonical": "La Roche-Posay",
+      "name_canonical": "Toleriane Double Repair Face Moisturizer",
+      "name_aliases": [
+        "toleriane double repair",
+        "double repair moisturizer",
+        "toleriane moisturizer"
+      ],
+      "brand_aliases": [
+        "la roche posay",
+        "la-roche-posay",
+        "lrp"
+      ],
+      "line": "Toleriane",
+      "category": "Moisturizer",
+      "image_url": "",
+      "ingredients_status": "missing",
+      "ingredients_text": "",
+      "source_priority": 90,
+      "confidence_metadata": {
+        "quality": "high",
+        "freshness": "daily",
+        "updated_at": "2026-02-28T00:00:00.000Z",
+        "popularity": 0.9
+      }
+    },
+    {
+      "product_id": "cerave_moisturizing_cream",
+      "brand_canonical": "CeraVe",
+      "name_canonical": "Moisturizing Cream",
+      "name_aliases": [
+        "cerave moisturizing cream",
+        "moisturising cream",
+        "cerave cream"
+      ],
+      "brand_aliases": [
+        "cerave",
+        "cera ve"
+      ],
+      "line": "Moisturizing",
+      "category": "Cream",
+      "image_url": "",
+      "ingredients_status": "missing",
+      "ingredients_text": "",
+      "source_priority": 88,
+      "confidence_metadata": {
+        "quality": "high",
+        "freshness": "daily",
+        "updated_at": "2026-02-28T00:00:00.000Z",
+        "popularity": 0.95
+      }
+    }
+  ]
+}
