@@ -18,7 +18,6 @@ services:
     name: skinscan-frontend
     runtime: static
     plan: free
-    region: frankfurt
     branch: codex/coverage-reliability-backend
     rootDir: .
     buildCommand: "bash scripts/build_pages.sh"
