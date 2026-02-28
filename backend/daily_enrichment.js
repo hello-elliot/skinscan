@@ -9,6 +9,8 @@ const MISS_PATH = path.join(DATA_DIR, 'coverage_miss_queue.json');
 const UNKNOWN_PATH = path.join(DATA_DIR, 'unknown_ingredient_queue.json');
 const LEARNED_SYNONYMS_PATH = path.join(DATA_DIR, 'ingredient_synonyms_learned.json');
 const INGREDIENT_KNOWLEDGE_PATH = path.join(DATA_DIR, 'ingredient_knowledge.json');
+const INGREDIENT_PROPOSALS_PATH = path.join(DATA_DIR, 'ingredient_proposals.json');
+const FRONTEND_INGREDIENT_OVERRIDES_PATH = path.join(DATA_DIR, 'frontend_ingredient_overrides.json');
 
 function readJson(filePath, fallback) {
   try {
@@ -60,6 +62,22 @@ function dedupeProducts(products) {
   return [...byKey.values()];
 }
 
+function normalizeIngredientToken(s) {
+  return String(s || '')
+    .toUpperCase()
+    .replace(/[()[\]{}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function shouldAutoApproveProposal(proposal) {
+  if (!proposal) return false;
+  if (proposal.state && proposal.state !== 'proposed') return false;
+  if (proposal.confidence === 'high') return true;
+  if (proposal.confidence === 'medium' && proposal.autoApprovedEligible) return true;
+  return false;
+}
+
 function main() {
   const index = readJson(INDEX_PATH, { version: 1, last_updated: new Date().toISOString(), products: [] });
   const catalog = readJson(CATALOG_PATH, { version: 1, last_updated: new Date().toISOString(), products: [] });
@@ -67,8 +85,11 @@ function main() {
   const unknownQueue = readJson(UNKNOWN_PATH, { items: [] });
   const learned = readJson(LEARNED_SYNONYMS_PATH, { items: [] });
   const ingredientKnowledge = readJson(INGREDIENT_KNOWLEDGE_PATH, { canonical: {}, synonyms: {}, family_rules: [] });
+  const ingredientProposals = readJson(INGREDIENT_PROPOSALS_PATH, { items: [] });
+  const frontendOverrides = readJson(FRONTEND_INGREDIENT_OVERRIDES_PATH, { db: {}, aliases: {}, synonyms: {}, familyRules: [] });
   const promoted = [];
   const promotedUnknowns = [];
+  let autoApproved = 0;
 
   const normalizedProducts = index.products.map(p => ({
     ...p,
@@ -129,6 +150,54 @@ function main() {
     } else if (/EXTRACT/.test(token)) {
       ingredientKnowledge.synonyms[token] = 'PLANT EXTRACT';
     }
+
+    const existingProposal = ingredientProposals.items.find(x => x.tokenHash === item.tokenHash);
+    if (!existingProposal) {
+      const canonicalName = normalizeIngredientToken(mapped || token);
+      ingredientProposals.items.push({
+        tokenHash: item.tokenHash,
+        normalizedToken: token,
+        canonicalName,
+        rating: { acne: 0, irr: 0, dry: 0, al: 0, safe: null, func: 'skin conditioning' },
+        synonyms: mapped ? [token] : [],
+        confidence: mapped ? 'medium' : 'low',
+        evidenceTier: mapped ? 'medium' : 'low',
+        reasoningShort: mapped ? 'Mapped from canonical overlap during nightly enrichment.' : 'Auto-created from unknown queue.',
+        state: 'proposed',
+        autoApprovedEligible: !!mapped,
+        updatedAt: new Date().toISOString()
+      });
+    }
+  });
+
+  ingredientProposals.items.forEach(p => {
+    if (!shouldAutoApproveProposal(p)) return;
+    const canonicalName = normalizeIngredientToken(p.canonicalName || p.normalizedToken);
+    ingredientKnowledge.canonical[canonicalName] = {
+      acne: Number(p.rating?.acne || 0),
+      irr: Number(p.rating?.irr || 0),
+      dry: Number(p.rating?.dry || 0),
+      al: Number(p.rating?.al || 0),
+      safe: p.rating?.safe === null ? null : !!p.rating?.safe,
+      func: String(p.rating?.func || 'skin conditioning')
+    };
+    ingredientKnowledge.synonyms[p.normalizedToken] = canonicalName;
+    (p.synonyms || []).forEach(s => {
+      const syn = normalizeIngredientToken(s);
+      if (syn) ingredientKnowledge.synonyms[syn] = canonicalName;
+    });
+    frontendOverrides.db[canonicalName] = ingredientKnowledge.canonical[canonicalName];
+    frontendOverrides.aliases[p.normalizedToken] = canonicalName;
+    frontendOverrides.synonyms[p.normalizedToken] = canonicalName;
+    (p.synonyms || []).forEach(s => {
+      const syn = normalizeIngredientToken(s);
+      if (!syn) return;
+      frontendOverrides.aliases[syn] = canonicalName;
+      frontendOverrides.synonyms[syn] = canonicalName;
+    });
+    p.state = 'approved_auto';
+    p.approvedAt = new Date().toISOString();
+    autoApproved += 1;
   });
 
   index.products = dedupeProducts(index.products);
@@ -139,13 +208,17 @@ function main() {
   writeJson(CATALOG_PATH, catalog);
   writeJson(LEARNED_SYNONYMS_PATH, learned);
   writeJson(INGREDIENT_KNOWLEDGE_PATH, ingredientKnowledge);
+  writeJson(INGREDIENT_PROPOSALS_PATH, ingredientProposals);
+  writeJson(FRONTEND_INGREDIENT_OVERRIDES_PATH, frontendOverrides);
 
   console.log(JSON.stringify({
     ok: true,
     productCount: index.products.length,
     catalogCount: catalog.products.length,
     promotedMisses: promoted.length,
-    promotedUnknowns: promotedUnknowns.length
+    promotedUnknowns: promotedUnknowns.length,
+    proposalCount: ingredientProposals.items.length,
+    autoApproved
   }, null, 2));
 }
 

@@ -1,0 +1,41 @@
+{
+  "db": {
+    "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "soothing/antimicrobial"
+    },
+    "C12-20 ALKYL GLUCOSIDE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier/surfactant"
+    },
+    "SODIUM DNA": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning"
+    }
+  },
+  "aliases": {
+    "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
+    "C12-20 ALKYL GLUCOSIDE": "C12-20 ALKYL GLUCOSIDE",
+    "SODIUM DNA": "SODIUM DNA",
+    "TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER"
+  },
+  "synonyms": {
+    "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
+    "C12-20 ALKYL GLUCOSIDE": "C12-20 ALKYL GLUCOSIDE",
+    "SODIUM DNA": "SODIUM DNA",
+    "TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER"
+  },
+  "familyRules": []
+}

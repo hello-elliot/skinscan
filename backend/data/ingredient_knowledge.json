@@ -87,12 +87,38 @@
       "al": 0,
       "safe": null,
       "func": "colorant"
+    },
+    "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "soothing/antimicrobial"
+    },
+    "C12-20 ALKYL GLUCOSIDE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier/surfactant"
+    },
+    "SODIUM DNA": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning"
     }
   },
   "synonyms": {
     "YEAST EXTRACT/FAEX/EXTRAIT DE LEVURE": "YEAST EXTRACT",
     "YELLOW 5 (CI 19140)": "YELLOW 5",
-    "CI 19140": "YELLOW 5"
+    "CI 19140": "YELLOW 5",
+    "TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
+    "MELALEUCA ALTERNIFOLIA LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER"
   },
   "family_rules": [
     {

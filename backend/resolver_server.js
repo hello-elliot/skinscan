@@ -16,6 +16,8 @@ const SOURCE_CACHE_PATH = path.join(DATA_DIR, 'source_cache.json');
 const UNKNOWN_QUEUE_PATH = path.join(DATA_DIR, 'unknown_ingredient_queue.json');
 const SOURCE_PROFILE_PATH = path.join(DATA_DIR, 'product_source_profiles.json');
 const INGREDIENT_KNOWLEDGE_PATH = path.join(DATA_DIR, 'ingredient_knowledge.json');
+const INGREDIENT_PROPOSALS_PATH = path.join(DATA_DIR, 'ingredient_proposals.json');
+const FRONTEND_INGREDIENT_OVERRIDES_PATH = path.join(DATA_DIR, 'frontend_ingredient_overrides.json');
 
 const SOURCE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SOURCE_TIMEOUT_MS = 3000;
@@ -173,12 +175,52 @@ function readIngredientKnowledge() {
   };
 }
 
-function resolveIngredientKnowledge(token, knowledge) {
-  const normalizedToken = String(token || '')
+function writeIngredientKnowledge(knowledge) {
+  writeJson(INGREDIENT_KNOWLEDGE_PATH, {
+    canonical: knowledge.canonical || {},
+    synonyms: knowledge.synonyms || {},
+    family_rules: Array.isArray(knowledge.family_rules) ? knowledge.family_rules : []
+  });
+}
+
+function readIngredientProposals() {
+  return readJson(INGREDIENT_PROPOSALS_PATH, { items: [] });
+}
+
+function writeIngredientProposals(data) {
+  writeJson(INGREDIENT_PROPOSALS_PATH, { items: Array.isArray(data.items) ? data.items : [] });
+}
+
+function readFrontendIngredientOverrides() {
+  return readJson(FRONTEND_INGREDIENT_OVERRIDES_PATH, { db: {}, aliases: {}, synonyms: {}, familyRules: [] });
+}
+
+function writeFrontendIngredientOverrides(value) {
+  writeJson(FRONTEND_INGREDIENT_OVERRIDES_PATH, {
+    db: value.db || {},
+    aliases: value.aliases || {},
+    synonyms: value.synonyms || {},
+    familyRules: Array.isArray(value.familyRules) ? value.familyRules : []
+  });
+}
+
+function normalizeIngredientToken(token) {
+  return String(token || '')
     .toUpperCase()
     .replace(/[()[\]{}]/g, ' ')
+    .replace(/\s*\/\s*/g, '/')
+    .replace(/\s*-\s*/g, '-')
+    .replace(/[;,|]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function formatCanonicalName(name) {
+  return normalizeIngredientToken(name).replace(/[^\w\s\/\-.+]/g, '').trim();
+}
+
+function resolveIngredientKnowledge(token, knowledge) {
+  const normalizedToken = normalizeIngredientToken(token);
   if (!normalizedToken) return { normalizedToken: '', matchType: 'unknown', canonicalId: '', confidence: 'low' };
   if (knowledge.canonical[normalizedToken]) {
     return { normalizedToken, matchType: 'exact', canonicalId: normalizedToken, confidence: 'high' };
@@ -454,9 +496,9 @@ function upsertMiss(rawQuery, normalizedQuery, failureStage, details) {
   return item;
 }
 
-function upsertUnknownIngredient(token, source = 'resolver') {
+function upsertUnknownIngredient(token, source = 'resolver', sourceProductId = '') {
   const q = readJson(UNKNOWN_QUEUE_PATH, { items: [] });
-  const normalizedToken = normalizeText(token).toUpperCase();
+  const normalizedToken = normalizeIngredientToken(token);
   if (!normalizedToken) return null;
   const tokenHash = hashText(normalizedToken).slice(0, 16);
   const now = nowIso();
@@ -468,13 +510,19 @@ function upsertUnknownIngredient(token, source = 'resolver') {
       count: 0,
       firstSeenAt: now,
       lastSeenAt: now,
-      sources: {}
+      sources: {},
+      sourceProductIds: [],
+      sampleTokens: []
     };
     q.items.push(item);
   }
   item.count += 1;
   item.lastSeenAt = now;
   item.sources[source] = (item.sources[source] || 0) + 1;
+  if (sourceProductId) {
+    item.sourceProductIds = [...new Set([...(item.sourceProductIds || []), String(sourceProductId)])].slice(0, 20);
+  }
+  item.sampleTokens = [...new Set([...(item.sampleTokens || []), String(token)])].slice(0, 10);
   writeJson(UNKNOWN_QUEUE_PATH, q);
   return item;
 }
@@ -1012,6 +1060,228 @@ function parseAiResult(text) {
   return { ingredientsText, confidence: quality.confidence };
 }
 
+function parseJsonObjectFromText(text) {
+  const cleaned = String(text || '').replace(/```json|```/gi, '');
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[0]);
+  } catch (_) {
+    return null;
+  }
+}
+
+function clampInt(value, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return min;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+function hasCorroboration(token, canonicalName, knowledge) {
+  const t = normalizeIngredientToken(token);
+  const c = formatCanonicalName(canonicalName);
+  if (t === c) return true;
+  if (knowledge.synonyms[t] === c) return true;
+  if (knowledge.canonical[c]) return true;
+  return (knowledge.family_rules || []).some(rule => {
+    try {
+      return rule.canonical === c && new RegExp(rule.pattern, 'i').test(t);
+    } catch (_) {
+      return false;
+    }
+  });
+}
+
+function validateIngredientProposal(raw, token, knowledge) {
+  if (!raw || typeof raw !== 'object') return { ok: false, reason: 'invalid_payload' };
+  const normalizedToken = normalizeIngredientToken(token);
+  const canonicalName = formatCanonicalName(raw.canonicalName || raw.canonical_name || normalizedToken);
+  const confidence = String(raw.confidence || 'low').toLowerCase();
+  const evidenceTier = String(raw.evidenceTier || raw.evidence_tier || confidence || 'low').toLowerCase();
+  const proposal = {
+    normalizedToken,
+    canonicalName,
+    rating: {
+      acne: clampInt(raw.acne, 0, 5),
+      irr: clampInt(raw.irr, 0, 3),
+      dry: clampInt(raw.dry, 0, 3),
+      al: clampInt(raw.al, 0, 3),
+      safe: raw.safe === null ? null : (raw.safe === true || raw.safe === false ? raw.safe : null),
+      func: String(raw.func || 'skin conditioning').slice(0, 120).trim() || 'skin conditioning'
+    },
+    synonyms: [...new Set((Array.isArray(raw.synonyms) ? raw.synonyms : []).map(formatCanonicalName).filter(Boolean).slice(0, 25))],
+    confidence: ['high', 'medium', 'low'].includes(confidence) ? confidence : 'low',
+    evidenceTier: ['high', 'medium', 'low'].includes(evidenceTier) ? evidenceTier : 'low',
+    reasoningShort: String(raw.reasoningShort || raw.reasoning_short || '').slice(0, 300),
+    proposedAt: nowIso()
+  };
+
+  if (!proposal.canonicalName) return { ok: false, reason: 'missing_canonical' };
+  if (proposal.confidence === 'low' && !hasCorroboration(normalizedToken, proposal.canonicalName, knowledge) && proposal.synonyms.length === 0) {
+    return { ok: false, reason: 'low_confidence_no_corroboration', proposal };
+  }
+  return { ok: true, proposal };
+}
+
+function heuristicIngredientProposal(token, knowledge) {
+  const t = normalizeIngredientToken(token);
+  const known = resolveIngredientKnowledge(t, knowledge);
+  if (known.canonicalId) {
+    return {
+      canonicalName: known.canonicalId,
+      acne: 0,
+      irr: 0,
+      dry: 0,
+      al: 0,
+      safe: true,
+      func: 'skin conditioning',
+      synonyms: [t],
+      confidence: known.confidence === 'high' ? 'high' : 'medium',
+      evidenceTier: 'medium',
+      reasoningShort: 'Mapped via existing synonym/family knowledge.'
+    };
+  }
+  const preset = {
+    'MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER': { canonicalName: 'MELALEUCA ALTERNIFOLIA LEAF WATER', acne: 0, irr: 1, dry: 0, al: 0, safe: true, func: 'soothing/antimicrobial', confidence: 'high' },
+    'C12-20 ALKYL GLUCOSIDE': { canonicalName: 'C12-20 ALKYL GLUCOSIDE', acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'emulsifier/surfactant', confidence: 'high' },
+    'SODIUM DNA': { canonicalName: 'SODIUM DNA', acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'skin conditioning', confidence: 'high' }
+  }[t];
+  if (preset) {
+    return { ...preset, synonyms: [t], evidenceTier: 'medium', reasoningShort: 'High-frequency token with stable INCI identity.' };
+  }
+  if (/\bEXTRACT\b/.test(t)) {
+    return {
+      canonicalName: 'PLANT EXTRACT',
+      acne: 0, irr: 0, dry: 0, al: 0, safe: true,
+      func: 'plant extract (generic)',
+      synonyms: [t],
+      confidence: 'medium',
+      evidenceTier: 'low',
+      reasoningShort: 'Generic extract fallback.'
+    };
+  }
+  return {
+    canonicalName: t,
+    acne: 0, irr: 0, dry: 0, al: 0, safe: null,
+    func: 'skin conditioning',
+    synonyms: [],
+    confidence: 'low',
+    evidenceTier: 'low',
+    reasoningShort: 'Insufficient evidence; provisional neutral fallback.'
+  };
+}
+
+async function proposeIngredientRating(token, knowledge) {
+  const fallback = heuristicIngredientProposal(token, knowledge);
+  if (!AI_FALLBACK_ENABLED || adapterOpen('ai')) {
+    return { ...fallback, source: 'heuristic' };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SOURCE_TIMEOUT_MS + 2500);
+  try {
+    const res = await fetch(`${AI_PROXY_URL.replace(/\/+$/, '')}/v1/messages`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'web-search-2025-03-05'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 900,
+        messages: [{
+          role: 'user',
+          content: `Assess cosmetic ingredient safety for this INCI token: "${normalizeIngredientToken(token)}". Return strict JSON only:
+{
+  "canonicalName":"...",
+  "acne":0-5,
+  "irr":0-3,
+  "dry":0-3,
+  "al":0-3,
+  "func":"...",
+  "safe":true|false|null,
+  "synonyms":["..."],
+  "confidence":"high|medium|low",
+  "evidenceTier":"high|medium|low",
+  "reasoningShort":"<=200 chars"
+}
+Use conservative dermatology-aligned assumptions; do not overstate risk without evidence.`
+        }]
+      })
+    });
+    if (!res.ok) throw new Error(`http_${res.status}`);
+    const data = await res.json();
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+    const parsed = parseJsonObjectFromText(text);
+    const validated = validateIngredientProposal(parsed, token, knowledge);
+    if (!validated.ok) return { ...fallback, source: 'heuristic' };
+    markAdapterSuccess('ai');
+    return { ...validated.proposal, source: 'ai' };
+  } catch (_) {
+    markAdapterFailure('ai');
+    return { ...fallback, source: 'heuristic' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function shouldAutoApproveProposal(proposal, knowledge) {
+  if (!proposal) return false;
+  if (proposal.confidence === 'high') return true;
+  if (proposal.confidence !== 'medium') return false;
+  return hasCorroboration(proposal.normalizedToken, proposal.canonicalName, knowledge) || (proposal.synonyms || []).length > 0;
+}
+
+function persistApprovedIngredientProposal(proposal, approvalState = 'approved_manual') {
+  const knowledge = readIngredientKnowledge();
+  const canonicalName = formatCanonicalName(proposal.canonicalName || proposal.normalizedToken);
+  knowledge.canonical[canonicalName] = {
+    acne: clampInt(proposal.rating?.acne, 0, 5),
+    irr: clampInt(proposal.rating?.irr, 0, 3),
+    dry: clampInt(proposal.rating?.dry, 0, 3),
+    al: clampInt(proposal.rating?.al, 0, 3),
+    safe: proposal.rating?.safe === null ? null : !!proposal.rating?.safe,
+    func: String(proposal.rating?.func || 'skin conditioning').slice(0, 120)
+  };
+  knowledge.synonyms[proposal.normalizedToken] = canonicalName;
+  (proposal.synonyms || []).forEach(s => {
+    const syn = formatCanonicalName(s);
+    if (syn) knowledge.synonyms[syn] = canonicalName;
+  });
+  if (proposal.familyRule && proposal.familyRule.pattern) {
+    const exists = (knowledge.family_rules || []).some(rule => rule.pattern === proposal.familyRule.pattern && rule.canonical === canonicalName);
+    if (!exists) knowledge.family_rules.push({ pattern: proposal.familyRule.pattern, canonical: canonicalName });
+  }
+  writeIngredientKnowledge(knowledge);
+
+  const front = readFrontendIngredientOverrides();
+  front.db[canonicalName] = knowledge.canonical[canonicalName];
+  front.aliases[proposal.normalizedToken] = canonicalName;
+  front.synonyms[proposal.normalizedToken] = canonicalName;
+  (proposal.synonyms || []).forEach(s => {
+    const syn = formatCanonicalName(s);
+    if (!syn) return;
+    front.aliases[syn] = canonicalName;
+    front.synonyms[syn] = canonicalName;
+  });
+  if (proposal.familyRule && proposal.familyRule.pattern) {
+    const exists = (front.familyRules || []).some(rule => rule.pattern === proposal.familyRule.pattern && rule.canonical === canonicalName);
+    if (!exists) front.familyRules.push({ pattern: proposal.familyRule.pattern, canonical: canonicalName });
+  }
+  writeFrontendIngredientOverrides(front);
+
+  const proposals = readIngredientProposals();
+  const item = proposals.items.find(x => x.tokenHash === proposal.tokenHash);
+  if (item) {
+    item.state = approvalState;
+    item.approvedAt = nowIso();
+    item.canonicalName = canonicalName;
+    item.rating = knowledge.canonical[canonicalName];
+  }
+  writeIngredientProposals(proposals);
+}
+
 async function fetchIngredientsFromAIFallback(query) {
   if (!AI_FALLBACK_ENABLED) return null;
   const cacheKey = `ai:${normalizeText(query)}`;
@@ -1207,7 +1477,7 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
       tokens.forEach(token => {
         const resolved = resolveIngredientKnowledge(token, knowledge);
         if (matchTypeCount[resolved.matchType] !== undefined) matchTypeCount[resolved.matchType] += 1;
-        if (resolved.matchType === 'unknown') upsertUnknownIngredient(token, 'resolver_enriched');
+        if (resolved.matchType === 'unknown') upsertUnknownIngredient(token, 'resolver_enriched', productId);
       });
 
       withJobState(productId, { state: 'available', done: true, lastError: '' });
@@ -1448,13 +1718,114 @@ async function handleUnknownIngredients(req, res) {
   const body = await readBody(req);
   const items = Array.isArray(body.items) ? body.items : [];
   const source = String(body.source || 'client').trim() || 'client';
+  const sourceProductId = String(body.sourceProductId || body.productId || '').trim();
   let count = 0;
   for (const token of items) {
-    const rec = upsertUnknownIngredient(String(token || ''), source);
+    const rec = upsertUnknownIngredient(String(token || ''), source, sourceProductId);
     if (rec) count += 1;
   }
   pushMetric('unknown_ingredient_ingested', { count, source });
   sendJson(res, 200, { ok: true, count });
+}
+
+async function handleUnknownIngredientsPropose(req, res) {
+  const body = await readBody(req);
+  const force = !!body.force;
+  const explicitTokens = Array.isArray(body.tokens) ? body.tokens.map(normalizeIngredientToken).filter(Boolean) : [];
+  const queue = readJson(UNKNOWN_QUEUE_PATH, { items: [] });
+  const knowledge = readIngredientKnowledge();
+  const proposals = readIngredientProposals();
+  const tokens = explicitTokens.length
+    ? explicitTokens
+    : queue.items.filter(x => (x.count || 0) >= 3).map(x => x.normalizedToken).filter(Boolean);
+
+  const out = [];
+  for (const token of tokens) {
+    const tokenHash = hashText(token).slice(0, 16);
+    const existing = proposals.items.find(x => x.tokenHash === tokenHash);
+    if (existing && !force) {
+      out.push(existing);
+      continue;
+    }
+    const proposed = await proposeIngredientRating(token, knowledge);
+    const validated = validateIngredientProposal(proposed, token, knowledge);
+    const baseRecord = {
+      tokenHash,
+      normalizedToken: token,
+      canonicalName: formatCanonicalName(proposed.canonicalName || token),
+      rating: {
+        acne: clampInt(proposed.acne ?? proposed.rating?.acne, 0, 5),
+        irr: clampInt(proposed.irr ?? proposed.rating?.irr, 0, 3),
+        dry: clampInt(proposed.dry ?? proposed.rating?.dry, 0, 3),
+        al: clampInt(proposed.al ?? proposed.rating?.al, 0, 3),
+        safe: proposed.safe === null ? null : (proposed.safe === true || proposed.safe === false ? proposed.safe : null),
+        func: String((proposed.func ?? proposed.rating?.func) || 'skin conditioning').slice(0, 120)
+      },
+      synonyms: [...new Set((proposed.synonyms || []).map(formatCanonicalName).filter(Boolean))],
+      confidence: ['high', 'medium', 'low'].includes(String(proposed.confidence || '').toLowerCase()) ? String(proposed.confidence).toLowerCase() : 'low',
+      evidenceTier: ['high', 'medium', 'low'].includes(String(proposed.evidenceTier || '').toLowerCase()) ? String(proposed.evidenceTier).toLowerCase() : 'low',
+      reasoningShort: String(proposed.reasoningShort || '').slice(0, 300),
+      source: proposed.source || 'heuristic',
+      state: 'proposed',
+      updatedAt: nowIso()
+    };
+    const autoApprovedEligible = validated.ok && shouldAutoApproveProposal(validated.proposal, knowledge);
+    baseRecord.autoApprovedEligible = autoApprovedEligible;
+    baseRecord.validationStatus = validated.ok ? 'ok' : (validated.reason || 'invalid');
+    baseRecord.state = autoApprovedEligible ? 'approved_auto' : 'proposed';
+
+    if (existing) {
+      Object.assign(existing, baseRecord);
+    } else {
+      proposals.items.push(baseRecord);
+    }
+    if (autoApprovedEligible) {
+      persistApprovedIngredientProposal(baseRecord, 'approved_auto');
+      pushMetric('unknown_ingredient_proposal_auto_approved', { tokenHash, canonicalName: baseRecord.canonicalName });
+    } else {
+      pushMetric('unknown_ingredient_proposal_created', { tokenHash, validationStatus: baseRecord.validationStatus });
+    }
+    out.push(baseRecord);
+  }
+
+  writeIngredientProposals(proposals);
+  sendJson(res, 200, { ok: true, count: out.length, proposals: out });
+}
+
+async function handleUnknownIngredientsApply(req, res) {
+  const body = await readBody(req);
+  const tokenHash = String(body.tokenHash || '').trim();
+  const action = String(body.action || '').trim();
+  if (!tokenHash || !['approve', 'reject', 'approve_provisional'].includes(action)) {
+    sendJson(res, 400, { error: 'invalid_request', required: ['tokenHash', 'action'] });
+    return;
+  }
+
+  const proposals = readIngredientProposals();
+  const proposal = proposals.items.find(x => x.tokenHash === tokenHash);
+  if (!proposal) {
+    sendJson(res, 404, { error: 'proposal_not_found' });
+    return;
+  }
+
+  if (action === 'reject') {
+    proposal.state = 'rejected';
+    proposal.rejectedAt = nowIso();
+    writeIngredientProposals(proposals);
+    pushMetric('unknown_ingredient_proposal_rejected', { tokenHash });
+    sendJson(res, 200, { ok: true, tokenHash, state: proposal.state });
+    return;
+  }
+
+  if (action === 'approve_provisional') {
+    proposal.rating = {
+      acne: 0, irr: 0, dry: 0, al: 0, safe: null,
+      func: String(proposal.rating?.func || 'skin conditioning')
+    };
+  }
+  persistApprovedIngredientProposal(proposal, 'approved_manual');
+  pushMetric('unknown_ingredient_proposal_applied', { tokenHash, action });
+  sendJson(res, 200, { ok: true, tokenHash, state: 'approved_manual', canonicalName: proposal.canonicalName });
 }
 
 function handleCoverageMetrics(_req, res) {
@@ -1463,6 +1834,7 @@ function handleCoverageMetrics(_req, res) {
   const index = readIndex();
   const catalog = readCatalog();
   const unknown = readJson(UNKNOWN_QUEUE_PATH, { items: [] });
+  const proposals = readIngredientProposals();
   const last24h = Date.now() - (24 * 60 * 60 * 1000);
   const recentEvents = metrics.events.filter(e => Date.parse(e.ts) >= last24h);
   const resolved = recentEvents.filter(e => e.name === 'resolver_resolved').length;
@@ -1482,7 +1854,10 @@ function handleCoverageMetrics(_req, res) {
       missCount: miss.items.length,
       topMisses: [...miss.items].sort((a, b) => b.count - a.count).slice(0, 10),
       unknownCount: unknown.items.length,
-      topUnknown: [...unknown.items].sort((a, b) => b.count - a.count).slice(0, 10)
+      topUnknown: [...unknown.items].sort((a, b) => b.count - a.count).slice(0, 10),
+      proposalCount: proposals.items.length,
+      proposalPending: proposals.items.filter(x => x.state === 'proposed').length,
+      proposalApproved: proposals.items.filter(x => x.state === 'approved_auto' || x.state === 'approved_manual').length
     },
     kpi: {
       resolverFoundRate24h: Number(foundRate.toFixed(4)),
@@ -1520,6 +1895,16 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && url.pathname === '/resolver/unknown-ingredients/propose') {
+      await handleUnknownIngredientsPropose(req, res);
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/resolver/unknown-ingredients/apply') {
+      await handleUnknownIngredientsApply(req, res);
+      return;
+    }
+
     const statusMatch = url.pathname.match(/^\/resolver\/products\/([^/]+)\/ingredients-status$/);
     if (req.method === 'GET' && statusMatch) {
       await handleIngredientsStatus(req, res, decodeURIComponent(statusMatch[1]));
@@ -1542,7 +1927,14 @@ const server = http.createServer(async (req, res) => {
         service: 'skinscan-resolver-api',
         ok: true,
         budgets: { syncMs: SYNC_ENRICH_BUDGET_MS, asyncPollMs: ASYNC_POLL_BUDGET_MS },
-        endpoints: ['/healthz', '/resolver/products', '/resolver/coverage-metrics']
+        endpoints: [
+          '/healthz',
+          '/resolver/products',
+          '/resolver/coverage-metrics',
+          '/resolver/unknown-ingredients',
+          '/resolver/unknown-ingredients/propose',
+          '/resolver/unknown-ingredients/apply'
+        ]
       });
       return;
     }

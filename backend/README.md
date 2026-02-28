@@ -109,6 +109,26 @@ Input:
 { "items": ["HYDROXYPROPYL TETRAHYDROPYRANTRIOL"], "source": "resolver" }
 ```
 
+### `POST /resolver/unknown-ingredients/propose`
+
+Input:
+
+```json
+{ "tokens": ["C12-20 ALKYL GLUCOSIDE"], "force": false }
+```
+
+Creates AI/heuristic ingredient proposals with constrained scoring schema.
+
+### `POST /resolver/unknown-ingredients/apply`
+
+Input:
+
+```json
+{ "tokenHash": "8480d801d8ccddc5", "action": "approve" }
+```
+
+Actions: `approve`, `reject`, `approve_provisional`.
+
 ### `GET /resolver/coverage-metrics`
 
 Returns index stats, miss queue, and 24h resolver KPI snapshot.
@@ -124,4 +144,6 @@ Returns index stats, miss queue, and 24h resolver KPI snapshot.
 - `backend/data/unknown_ingredient_queue.json` backend unknown-ingredient queue
 - `backend/data/ingredient_synonyms_learned.json` nightly review-driven synonym candidates
 - `backend/data/ingredient_knowledge.json` canonical ingredient + synonym + family rules
+- `backend/data/ingredient_proposals.json` proposal pipeline state
+- `backend/data/frontend_ingredient_overrides.json` runtime UI ingredient override payload
 - `backend/data/product_source_profiles.json` curated PDP sources for top products

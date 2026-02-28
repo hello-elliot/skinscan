@@ -1,0 +1,70 @@
+{
+  "items": [
+    {
+      "tokenHash": "42ef058a4aa6c5db",
+      "normalizedToken": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
+      "canonicalName": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
+      "rating": {
+        "acne": 0,
+        "irr": 1,
+        "dry": 0,
+        "al": 0,
+        "safe": true,
+        "func": "soothing/antimicrobial"
+      },
+      "synonyms": [],
+      "confidence": "high",
+      "evidenceTier": "medium",
+      "reasoningShort": "Seeded from high-frequency unknown backlog.",
+      "source": "manual_seed",
+      "state": "approved_manual",
+      "autoApprovedEligible": true,
+      "updatedAt": "2026-02-28T17:19:13.776Z",
+      "approvedAt": "2026-02-28T17:19:13.777Z"
+    },
+    {
+      "tokenHash": "8480d801d8ccddc5",
+      "normalizedToken": "C12-20 ALKYL GLUCOSIDE",
+      "canonicalName": "C12-20 ALKYL GLUCOSIDE",
+      "rating": {
+        "acne": 0,
+        "irr": 0,
+        "dry": 0,
+        "al": 0,
+        "safe": true,
+        "func": "emulsifier/surfactant"
+      },
+      "synonyms": [],
+      "confidence": "high",
+      "evidenceTier": "medium",
+      "reasoningShort": "Seeded from high-frequency unknown backlog.",
+      "source": "manual_seed",
+      "state": "approved_manual",
+      "autoApprovedEligible": true,
+      "updatedAt": "2026-02-28T17:19:13.777Z",
+      "approvedAt": "2026-02-28T17:19:13.777Z"
+    },
+    {
+      "tokenHash": "6153486f68fd8630",
+      "normalizedToken": "SODIUM DNA",
+      "canonicalName": "SODIUM DNA",
+      "rating": {
+        "acne": 0,
+        "irr": 0,
+        "dry": 0,
+        "al": 0,
+        "safe": true,
+        "func": "skin conditioning"
+      },
+      "synonyms": [],
+      "confidence": "high",
+      "evidenceTier": "medium",
+      "reasoningShort": "Seeded from high-frequency unknown backlog.",
+      "source": "manual_seed",
+      "state": "approved_manual",
+      "autoApprovedEligible": true,
+      "updatedAt": "2026-02-28T17:19:13.777Z",
+      "approvedAt": "2026-02-28T17:19:13.777Z"
+    }
+  ]
+}

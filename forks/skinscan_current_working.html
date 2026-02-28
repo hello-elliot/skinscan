@@ -563,6 +563,23 @@ const INGREDIENT_FAMILY_RULES = [
 ];
 const GENERIC_PLANT_EXTRACT = { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'plant extract (generic)' };
 
+// Build-time injected backend-approved ingredient updates.
+const INGREDIENT_RUNTIME_OVERRIDES = window.__SKINSCAN_INGREDIENT_OVERRIDES || {};
+Object.assign(INGREDIENT_DB, INGREDIENT_RUNTIME_OVERRIDES.db || {});
+Object.assign(INCI_ALIASES, INGREDIENT_RUNTIME_OVERRIDES.aliases || {});
+Object.assign(INGREDIENT_SYNONYMS, INGREDIENT_RUNTIME_OVERRIDES.synonyms || {});
+if (Array.isArray(INGREDIENT_RUNTIME_OVERRIDES.familyRules)) {
+  INGREDIENT_RUNTIME_OVERRIDES.familyRules.forEach(rule => {
+    if (!rule || !rule.pattern || !rule.canonical) return;
+    const exists = INGREDIENT_FAMILY_RULES.some(r => String(r.pattern) === String(rule.pattern) && r.canonical === rule.canonical);
+    if (!exists) {
+      try {
+        INGREDIENT_FAMILY_RULES.push({ pattern: new RegExp(rule.pattern), canonical: rule.canonical });
+      } catch (_) {}
+    }
+  });
+}
+
 function resolveIngredient(token) {
   // 1. Normalize raw token
   let key = normalizeIngredient(token);
