@@ -23,6 +23,7 @@ Optional env:
 
 - `AI_PROXY_URL` (default: `https://skinscan-proxy.kelly-f.workers.dev`)
 - `AI_FALLBACK_ENABLED=true|false`
+- `AUTO_RESOLVE_ENABLED=true|false` (if `false`, only strict exact-high matches auto-resolve)
 
 ## Daily Enrichment Job
 
@@ -48,10 +49,16 @@ Output:
 ```json
 {
   "state": "resolved_high",
+  "decisionReason": "exact_high",
+  "autoResolved": true,
   "product": {
     "productId": "estee_lauder_anr_serum",
     "brand": "Estee Lauder",
     "name": "Advanced Night Repair Synchronized Multi-Recovery Complex Serum",
+    "brandMatched": true,
+    "nameSimilarity": 0.98,
+    "brandSimilarity": 1,
+    "scoreGap": 0.19,
     "ingredientsStatus": "missing",
     "ingredientResolutionState": "resolving",
     "ingredientJobId": "estee_lauder_anr_serum"
@@ -137,6 +144,7 @@ Returns index stats, miss queue, and 24h resolver KPI snapshot.
 
 - `backend/data/product_index.json` canonical product index
 - `backend/data/product_catalog.json` searchable catalog with aliases/freshness
+- `backend/data/brand_lexicon.json` daily-generated brand alias lexicon
 - `backend/data/coverage_miss_queue.json` miss-driven queue
 - `backend/data/resolver_metrics.json` telemetry aggregate events
 - `backend/data/source_cache.json` file-backed source cache (24h TTL)

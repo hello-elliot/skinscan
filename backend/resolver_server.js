@@ -10,6 +10,7 @@ const PORT = Number(process.env.PORT || process.env.RESOLVER_PORT || 8788);
 const DATA_DIR = path.join(__dirname, 'data');
 const INDEX_PATH = path.join(DATA_DIR, 'product_index.json');
 const CATALOG_PATH = path.join(DATA_DIR, 'product_catalog.json');
+const BRAND_LEXICON_PATH = path.join(DATA_DIR, 'brand_lexicon.json');
 const MISS_PATH = path.join(DATA_DIR, 'coverage_miss_queue.json');
 const METRICS_PATH = path.join(DATA_DIR, 'resolver_metrics.json');
 const SOURCE_CACHE_PATH = path.join(DATA_DIR, 'source_cache.json');
@@ -27,6 +28,13 @@ const CIRCUIT_OPEN_MS = 5 * 60 * 1000;
 const CIRCUIT_FAIL_THRESHOLD = 3;
 const AI_PROXY_URL = process.env.AI_PROXY_URL || 'https://skinscan-proxy.kelly-f.workers.dev';
 const AI_FALLBACK_ENABLED = String(process.env.AI_FALLBACK_ENABLED || 'true').toLowerCase() !== 'false';
+const AUTO_RESOLVE_ENABLED = String(process.env.AUTO_RESOLVE_ENABLED || 'true').toLowerCase() !== 'false';
+
+const GENERIC_PRODUCT_TOKENS = new Set([
+  'serum', 'cream', 'cleanser', 'toner', 'essence', 'mask', 'moisturizer', 'moisturising', 'moisturizing',
+  'gel', 'lotion', 'balm', 'oil', 'ampoule', 'sunscreen', 'sun', 'spf', 'treatment', 'repair', 'hydrating',
+  'hydration', 'night', 'day', 'water', 'face', 'skin', 'advanced', 'relief', 'first', 'care'
+]);
 
 const ingredientJobs = new Map();
 const activeIngredientResolves = new Map();
@@ -344,10 +352,49 @@ function productBrandTokens(product) {
   ].filter(Boolean);
 }
 
-function detectBrandHint(query, catalogProducts) {
+function readBrandLexicon(catalogProducts = []) {
+  const fromFile = readJson(BRAND_LEXICON_PATH, { aliases: [] });
+  const aliases = Array.isArray(fromFile.aliases) ? fromFile.aliases.map(normalizeText).filter(Boolean) : [];
+  if (aliases.length) return [...new Set(aliases)];
+  const generated = new Set();
+  for (const product of catalogProducts) {
+    const canonical = normalizeText(product.brand_canonical || '');
+    if (canonical.length >= 3) generated.add(canonical);
+    for (const alias of product.brand_aliases || []) {
+      const normalizedAlias = normalizeText(alias);
+      if (normalizedAlias.length >= 3) generated.add(normalizedAlias);
+    }
+  }
+  return [...generated];
+}
+
+function detectBrandHint(query, catalogProducts, lexicon = []) {
   const q = normalizeText(query);
   if (!q) return null;
   let best = null;
+  const canonicalByAlias = new Map();
+  for (const product of catalogProducts || []) {
+    const canonical = normalizeText(product.brand_canonical || '');
+    if (!canonical) continue;
+    const aliases = [...new Set([canonical, ...(product.brand_aliases || []).map(normalizeText)])].filter(Boolean);
+    for (const alias of aliases) {
+      if (alias.length < 3) continue;
+      canonicalByAlias.set(alias, canonical);
+    }
+  }
+  for (const alias of lexicon) {
+    const canonical = canonicalByAlias.get(alias) || alias;
+    if (alias.length < 3) continue;
+    if (!q.includes(alias)) continue;
+    const candidate = {
+      canonicalBrand: canonical,
+      matchedAlias: alias,
+      aliasLength: alias.length
+    };
+    if (!best || candidate.aliasLength > best.aliasLength) best = candidate;
+  }
+  if (best) return best;
+
   const seen = new Set();
   for (const product of catalogProducts || []) {
     const canonical = normalizeText(product.brand_canonical || '');
@@ -368,6 +415,22 @@ function detectBrandHint(query, catalogProducts) {
   return best;
 }
 
+function queryLooksBranded(query, brandHint, lexicon = []) {
+  if (brandHint) return { looksBranded: true, unknownBrandLikely: false };
+  const tokens = tokenize(query);
+  if (tokens.length < 2) return { looksBranded: false, unknownBrandLikely: false };
+
+  const first = tokens[0];
+  const second = tokens[1];
+  const bigram = `${first} ${second}`;
+  const trigram = tokens.length > 2 ? `${first} ${second} ${tokens[2]}` : '';
+  const hasLexiconPrefix = lexicon.some(alias => alias === first || alias === bigram || alias === trigram || alias.startsWith(bigram));
+  const mostlyGenericLead = GENERIC_PRODUCT_TOKENS.has(first) || GENERIC_PRODUCT_TOKENS.has(second);
+  const looksBranded = !mostlyGenericLead;
+  const unknownBrandLikely = looksBranded && !hasLexiconPrefix;
+  return { looksBranded, unknownBrandLikely };
+}
+
 function productMatchesBrandHint(product, brandHint) {
   if (!brandHint) return true;
   const tokens = productBrandTokens(product);
@@ -375,6 +438,16 @@ function productMatchesBrandHint(product, brandHint) {
   if (tokens.some(t => t === brandHint.canonicalBrand || brandHint.canonicalBrand.includes(t) || t.includes(brandHint.canonicalBrand))) return true;
   if (tokens.some(t => t === brandHint.matchedAlias || brandHint.matchedAlias.includes(t) || t.includes(brandHint.matchedAlias))) return true;
   return false;
+}
+
+function cleanDisplayText(value, maxLen = 180) {
+  if (!value) return '';
+  return String(value)
+    .replace(/\s+/g, ' ')
+    .replace(/\((open beauty facts|incidecoder|source:[^)]+)\)/ig, '')
+    .replace(/\s+\|\s+(official|reviews?|shop|store).*$/ig, '')
+    .trim()
+    .slice(0, maxLen);
 }
 
 function normalizeIngredientText(raw) {
@@ -433,6 +506,7 @@ function scoreProduct(query, product, brandHint) {
   const best = texts.reduce((m, t) => Math.max(m, overlapScore(query, t)), 0);
   const brand = overlapScore(query, product.brand_canonical || '');
   const line = overlapScore(query, product.line || '');
+  const exactNameMatch = texts.some(t => normalizeText(t) === normalizeText(query));
   const availBoost = product.ingredients_status === 'available' ? 0.15 : 0;
   const recency = product.confidence_metadata?.freshness === 'daily' ? 0.04 : 0;
   const popularity = Number(product.confidence_metadata?.popularity || 0) * 0.06;
@@ -442,19 +516,22 @@ function scoreProduct(query, product, brandHint) {
   const score = (best * 0.62) + (brand * 0.14) + (line * 0.08) + availBoost + recency + popularity + sourcePriority + brandGateBoost;
   return {
     score: Math.max(0, Math.min(1, score)),
-    brandMatched
+    brandMatched,
+    nameSimilarity: Number(best.toFixed(3)),
+    brandSimilarity: Number(brand.toFixed(3)),
+    exactNameMatch
   };
 }
 
-function toResolvedProduct(product, score, confidence, brandMatched = true) {
+function toResolvedProduct(product, scoring, confidence = 'low') {
   const resolutionState = inferResolutionState(product.product_id, product);
   const job = ingredientJobs.get(product.product_id);
   return {
     productId: product.product_id,
-    brand: product.brand_canonical,
-    name: product.name_canonical,
-    line: product.line || '',
-    category: product.category || '',
+    brand: cleanDisplayText(product.brand_canonical, 80),
+    name: cleanDisplayText(product.name_canonical, 180),
+    line: cleanDisplayText(product.line || '', 120),
+    category: cleanDisplayText(product.category || '', 120),
     imageUrl: product.image_url || '',
     ingredientsStatus: product.ingredients_status || 'missing',
     ingredientsText: product.ingredients_text || '',
@@ -463,53 +540,94 @@ function toResolvedProduct(product, score, confidence, brandMatched = true) {
     ingredientFailureStage: job?.lastError || '',
     confidence,
     needsConfirmation: confidence !== 'high',
-    brandMatched: !!brandMatched,
-    score: Number(score.toFixed(3))
+    brandMatched: !!scoring.brandMatched,
+    nameSimilarity: Number(scoring.nameSimilarity || 0),
+    brandSimilarity: Number(scoring.brandSimilarity || 0),
+    exactNameMatch: !!scoring.exactNameMatch,
+    scoreGap: 0,
+    score: Number(scoring.score.toFixed(3))
   };
 }
 
-function classify(ranked, options = {}) {
-  if (!ranked.length) return { state: 'not_found' };
+function annotateScoreGaps(ranked) {
+  if (!ranked.length) return [];
   const top = ranked[0];
   const second = ranked[1];
-  const gap = second ? top.score - second.score : 1;
-  const brandHintPresent = !!options.brandHintPresent;
-  const topBrandMismatch = brandHintPresent && !top.brandMatched;
-  const ambiguousTop = second ? gap < 0.12 : false;
-  if (topBrandMismatch || ambiguousTop) {
-    return {
-      state: 'candidate_list',
-      candidates: ranked.slice(0, 7).map((c, i) => ({
-        ...c,
-        confidence: i === 0 ? 'medium' : 'low',
-        needsConfirmation: true
-      }))
-    };
-  }
-  if (second && top.ingredientsStatus !== 'available' && second.ingredientsStatus === 'available' && gap < 0.08) {
-    return {
-      state: 'candidate_list',
-      candidates: ranked.slice(0, 7).map((c, i) => ({
-        ...c,
-        confidence: i === 0 ? 'medium' : 'low',
-        needsConfirmation: true
-      }))
-    };
-  }
-  if (top.score >= 0.85 && gap >= 0.15) {
-    return { state: 'resolved_high', product: { ...top, confidence: 'high', needsConfirmation: false } };
-  }
-  if (top.score >= 0.65) {
-    return { state: 'resolved_medium', product: { ...top, confidence: 'medium', needsConfirmation: true } };
-  }
+  const topGap = second ? Number((top.score - second.score).toFixed(3)) : 1;
+  return ranked.map((item, index) => ({
+    ...item,
+    scoreGap: index === 0 ? topGap : Number((top.score - item.score).toFixed(3))
+  }));
+}
+
+function asCandidateList(ranked, decisionReason) {
   return {
     state: 'candidate_list',
+    decisionReason,
+    autoResolved: false,
     candidates: ranked.slice(0, 7).map((c, i) => ({
       ...c,
       confidence: i === 0 ? 'medium' : 'low',
       needsConfirmation: true
     }))
   };
+}
+
+function classify(ranked, options = {}) {
+  if (!ranked.length) return { state: 'not_found', decisionReason: 'ambiguous', autoResolved: false };
+  const rankedWithGaps = annotateScoreGaps(ranked);
+  const top = rankedWithGaps[0];
+  const second = rankedWithGaps[1];
+  const gap = second ? top.score - second.score : 1;
+  const brandHintPresent = !!options.brandHintPresent;
+  const unknownBrandLikely = !!options.unknownBrandLikely;
+  const autoResolveEnabled = options.autoResolveEnabled !== false;
+  const topBrandMismatch = brandHintPresent && !top.brandMatched;
+  const weakBrandSignal = !brandHintPresent && top.brandSimilarity < 0.45;
+  const ambiguousTop = second ? gap < 0.12 : false;
+  const highQuality = (
+    top.score >= 0.86 &&
+    top.nameSimilarity >= 0.8 &&
+    gap >= 0.15 &&
+    !topBrandMismatch &&
+    !weakBrandSignal
+  );
+  const exactHigh = highQuality && (top.exactNameMatch || top.nameSimilarity >= 0.92);
+
+  if (unknownBrandLikely && weakBrandSignal) return asCandidateList(rankedWithGaps, 'unknown_brand');
+  if (topBrandMismatch) return asCandidateList(rankedWithGaps, 'brand_mismatch');
+  if (ambiguousTop) return asCandidateList(rankedWithGaps, 'low_gap');
+  if (second && top.ingredientsStatus !== 'available' && second.ingredientsStatus === 'available' && gap < 0.08) {
+    return asCandidateList(rankedWithGaps, 'ambiguous');
+  }
+
+  if (highQuality) {
+    if (!autoResolveEnabled && !exactHigh) {
+      return {
+        state: 'resolved_medium',
+        decisionReason: 'ambiguous',
+        autoResolved: false,
+        product: { ...top, confidence: 'medium', needsConfirmation: true }
+      };
+    }
+    return {
+      state: 'resolved_high',
+      decisionReason: 'exact_high',
+      autoResolved: true,
+      product: { ...top, confidence: 'high', needsConfirmation: false }
+    };
+  }
+
+  if (top.score >= 0.67 && top.nameSimilarity >= 0.58 && !topBrandMismatch) {
+    return {
+      state: 'resolved_medium',
+      decisionReason: 'ambiguous',
+      autoResolved: false,
+      product: { ...top, confidence: 'medium', needsConfirmation: true }
+    };
+  }
+
+  return asCandidateList(rankedWithGaps, unknownBrandLikely ? 'unknown_brand' : 'ambiguous');
 }
 
 function generateVariants(query) {
@@ -719,17 +837,19 @@ function resolveAgainstCatalog(query, region, locale) {
   const { corrected, applied } = applyCorrections(normalizedQuery);
   const variants = generateVariants(corrected);
   const catalog = readCatalog();
-  const brandHint = detectBrandHint(corrected, catalog.products);
+  const brandLexicon = readBrandLexicon(catalog.products);
+  const brandHint = detectBrandHint(corrected, catalog.products, brandLexicon);
+  const brandSignal = queryLooksBranded(corrected, brandHint, brandLexicon);
 
   let ranked = [];
   variants.forEach(v => {
     const scored = catalog.products
       .map(p => {
         const result = scoreProduct(v, p, brandHint);
-        return { product: ensureProductSchema(p), score: result.score, brandMatched: result.brandMatched };
+        return { product: ensureProductSchema(p), ...result };
       })
       .filter(s => s.score > (brandHint ? 0.16 : 0.24))
-      .map(s => toResolvedProduct(s.product, s.score, 'low', s.brandMatched));
+      .map(s => toResolvedProduct(s.product, s, 'low'));
     ranked.push(...scored);
   });
 
@@ -747,12 +867,17 @@ function resolveAgainstCatalog(query, region, locale) {
     ranked = ranked.filter(r => r.brandMatched || r.score >= 0.72);
   }
 
-  const classified = classify(ranked, { brandHintPresent: !!brandHint });
+  const classified = classify(ranked, {
+    brandHintPresent: !!brandHint,
+    unknownBrandLikely: brandSignal.unknownBrandLikely,
+    autoResolveEnabled: AUTO_RESOLVE_ENABLED
+  });
   return {
     ...classified,
     normalized_query: corrected,
     applied_corrections: applied,
     brand_hint: brandHint?.canonicalBrand || '',
+    autoResolveEnabled: AUTO_RESOLVE_ENABLED,
     region: region || '',
     locale: locale || ''
   };
@@ -791,7 +916,8 @@ async function resolveProductWithFallback(query, region, locale) {
   if (result.state === 'resolved_high') return result;
 
   const topScore = result.product?.score || result.candidates?.[0]?.score || 0;
-  if (result.state === 'not_found' || topScore < 0.72) {
+  const lowTrustDecision = ['unknown_brand', 'brand_mismatch'].includes(result.decisionReason);
+  if (result.state === 'not_found' || topScore < 0.72 || lowTrustDecision) {
     const candidates = await fetchCandidatesFromConnectors(result.normalized_query || query);
     if (candidates.length) {
       upsertCatalogProducts(candidates);
@@ -1664,6 +1790,8 @@ async function handleResolveProducts(req, res) {
   }
 
   let result = await resolveProductWithFallback(query, region, locale);
+  if (typeof result.autoResolved !== 'boolean') result.autoResolved = false;
+  if (!result.decisionReason) result.decisionReason = 'ambiguous';
 
   if (result.state === 'not_found') {
     const miss = upsertMiss(query, result.normalized_query, 'no_candidates', { region, locale });
@@ -1672,14 +1800,38 @@ async function handleResolveProducts(req, res) {
     return;
   }
 
+  if (result.state === 'candidate_list' || result.state === 'resolved_medium') {
+    const top = result.product || result.candidates?.[0] || null;
+    const stageMap = {
+      low_gap: 'low_confidence_gap',
+      brand_mismatch: 'brand_mismatch',
+      unknown_brand: 'unknown_brand',
+      ambiguous: 'low_confidence'
+    };
+    upsertMiss(query, result.normalized_query, stageMap[result.decisionReason] || 'low_confidence', {
+      region,
+      locale,
+      topProductId: top?.productId || '',
+      topBrand: top?.brand || '',
+      topName: top?.name || '',
+      topScore: top?.score || 0,
+      decisionReason: result.decisionReason
+    });
+  }
+
   pushMetric('resolver_resolved', { query: result.normalized_query, state: result.state });
   result = await enrichResolutionPayload(result, query, locale, region, { syncMode: true, forceRetry: false });
   pushMetric('search_confidence_assigned', {
     query: result.normalized_query,
     state: result.state,
+    decisionReason: result.decisionReason || '',
+    autoResolved: !!result.autoResolved,
     confidence: result.product?.confidence || (result.candidates?.[0]?.confidence || 'low'),
     brandHint: result.brand_hint || '',
-    brandMatched: result.product?.brandMatched ?? null
+    brandMatched: result.product?.brandMatched ?? null,
+    nameSimilarity: result.product?.nameSimilarity ?? (result.candidates?.[0]?.nameSimilarity ?? 0),
+    brandSimilarity: result.product?.brandSimilarity ?? (result.candidates?.[0]?.brandSimilarity ?? 0),
+    scoreGap: result.product?.scoreGap ?? (result.candidates?.[0]?.scoreGap ?? 0)
   });
 
   sendJson(res, 200, result);
@@ -1916,7 +2068,18 @@ function handleCoverageMetrics(_req, res) {
   const enrichStarted = recentEvents.filter(e => e.name === 'ingredient_resolve_started').length;
   const enrichSucceeded = recentEvents.filter(e => e.name === 'ingredient_resolve_succeeded').length;
   const enrichFailed = recentEvents.filter(e => e.name === 'ingredient_resolve_failed').length;
+  const confidenceEvents = recentEvents.filter(e => e.name === 'search_confidence_assigned');
+  const brandComparable = confidenceEvents.filter(e => typeof e.payload?.brandMatched === 'boolean');
+  const brandMatchedCount = brandComparable.filter(e => e.payload.brandMatched === true).length;
+  const autoResolvedEvents = confidenceEvents.filter(e => e.payload?.autoResolved);
+  const autoResolvedWrong = autoResolvedEvents.filter(e => e.payload?.brandMatched === false).length;
+  const candidateListCount = confidenceEvents.filter(e => e.payload?.state === 'candidate_list').length;
+  const noMatchCount = recentEvents.filter(e => e.name === 'resolver_not_found').length;
   const foundRate = (resolved + notFound) ? resolved / (resolved + notFound) : 1;
+  const top1BrandMatchRate = brandComparable.length ? brandMatchedCount / brandComparable.length : 1;
+  const wrongAutoSelectionRate = autoResolvedEvents.length ? autoResolvedWrong / autoResolvedEvents.length : 0;
+  const candidateListRate = confidenceEvents.length ? candidateListCount / confidenceEvents.length : 0;
+  const notFoundRate = (resolved + noMatchCount) ? noMatchCount / (resolved + noMatchCount) : 0;
 
   sendJson(res, 200, {
     index: {
@@ -1937,6 +2100,10 @@ function handleCoverageMetrics(_req, res) {
       resolverFoundRate24h: Number(foundRate.toFixed(4)),
       resolverNotFound24h: notFound,
       resolverResolved24h: resolved,
+      top1BrandMatchRate24h: Number(top1BrandMatchRate.toFixed(4)),
+      wrongAutoSelectionRate24h: Number(wrongAutoSelectionRate.toFixed(4)),
+      candidateListRate24h: Number(candidateListRate.toFixed(4)),
+      notFoundRate24h: Number(notFoundRate.toFixed(4)),
       ingredientResolveStarted24h: enrichStarted,
       ingredientResolveSucceeded24h: enrichSucceeded,
       ingredientResolveFailed24h: enrichFailed,
@@ -2001,6 +2168,7 @@ const server = http.createServer(async (req, res) => {
         service: 'skinscan-resolver-api',
         ok: true,
         budgets: { syncMs: SYNC_ENRICH_BUDGET_MS, asyncPollMs: ASYNC_POLL_BUDGET_MS },
+        autoResolveEnabled: AUTO_RESOLVE_ENABLED,
         endpoints: [
           '/healthz',
           '/resolver/products',

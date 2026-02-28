@@ -1076,13 +1076,19 @@ async function triggerSuggest(query) {
     return;
   }
   if (resolution.state === 'resolved_high') {
+    if (resolution.autoResolved === false && resolution.product) {
+      showSuggestions([resolution.product], { confirmMode: true });
+      setSearchState('results', { query });
+      trackEvent('product_confirmation_shown', { query, confidence: 'high_guarded', decisionReason: resolution.decisionReason || 'guarded_high' });
+      return;
+    }
     setSearchState('idle', { query });
     return;
   }
   if (resolution.state === 'resolved_medium') {
     showSuggestions([resolution.product], { confirmMode: true });
     setSearchState('results', { query });
-    trackEvent('product_confirmation_shown', { query, confidence: 'medium' });
+    trackEvent('product_confirmation_shown', { query, confidence: 'medium', decisionReason: resolution.decisionReason || '' });
     return;
   }
   if (resolution.state === 'candidate_list' && resolution.candidates?.length) {
@@ -1091,7 +1097,7 @@ async function triggerSuggest(query) {
     return;
   }
   setSearchState('empty', { query });
-  trackEvent('search_no_match', { query });
+  trackEvent('search_no_match', { query, decisionReason: resolution.decisionReason || '' });
 }
 async function searchOBF(query) {
   const url = `https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=8&fields=product_name,brands,ingredients_text,image_small_url,categories`;
@@ -1290,37 +1296,59 @@ function computeCandidateScore(candidate, normalizedQuery, usedFuzzy) {
   const imageBoost = candidate.img ? 0.05 : 0;
   const exactBoost = (candidate.name || '').toLowerCase() === normalizedQuery ? 0.2 : 0;
   const fuzzyPenalty = usedFuzzy ? -0.08 : 0;
-  return Math.max(0, Math.min(1, (nameScore * 0.72) + (brandScore * 0.2) + ingredientBoost + imageBoost + exactBoost + fuzzyPenalty));
+  const confidenceScore = Math.max(0, Math.min(1, (nameScore * 0.72) + (brandScore * 0.2) + ingredientBoost + imageBoost + exactBoost + fuzzyPenalty));
+  return {
+    confidenceScore,
+    nameSimilarity: Number(nameScore.toFixed(3)),
+    brandSimilarity: Number(brandScore.toFixed(3))
+  };
 }
 function rankCandidates(candidates, normalizedQuery, usedFuzzy) {
   return [...candidates]
-    .map(c => ({ ...c, confidenceScore: computeCandidateScore(c, normalizedQuery, usedFuzzy) }))
+    .map(c => ({ ...c, ...computeCandidateScore(c, normalizedQuery, usedFuzzy), brandMatched: null }))
     .sort((a, b) => b.confidenceScore - a.confidenceScore);
 }
 function classifyResolution(ranked) {
-  if (!ranked.length) return { state: 'not_found' };
+  if (!ranked.length) return { state: 'not_found', decisionReason: 'ambiguous', autoResolved: false };
   const top = ranked[0];
   const second = ranked[1];
   const gap = second ? (top.confidenceScore - second.confidenceScore) : 1;
+  const highExact = top.confidenceScore >= 0.9 && gap >= 0.2 && top.ingredientsStatus === 'available' && top.nameSimilarity >= 0.85;
   let confidence = 'low';
   let state = 'candidate_list';
-  if (top.confidenceScore >= 0.82 && gap >= 0.17 && top.ingredientsStatus === 'available') {
+  let decisionReason = 'ambiguous';
+  let autoResolved = false;
+  if (highExact) {
     confidence = 'high';
     state = 'resolved_high';
+    decisionReason = 'exact_high';
+    autoResolved = true;
   } else if (top.confidenceScore >= 0.62 && gap >= 0.12) {
     confidence = 'medium';
     state = 'resolved_medium';
+    decisionReason = gap < 0.15 ? 'low_gap' : 'ambiguous';
+  } else if (gap < 0.12) {
+    decisionReason = 'low_gap';
   }
   top.confidence = confidence;
   top.needsConfirmation = confidence !== 'high';
-  trackEvent('search_confidence_assigned', { confidence, topScore: Number(top.confidenceScore.toFixed(2)), candidateCount: ranked.length });
+  top.scoreGap = Number(gap.toFixed(3));
+  trackEvent('search_confidence_assigned', {
+    confidence,
+    topScore: Number(top.confidenceScore.toFixed(2)),
+    candidateCount: ranked.length,
+    decisionReason,
+    autoResolved
+  });
   if (state === 'candidate_list') {
     return {
       state,
-      candidates: ranked.slice(0, 7).map((c, idx) => ({ ...c, confidence: idx === 0 ? 'medium' : 'low', needsConfirmation: true }))
+      decisionReason,
+      autoResolved: false,
+      candidates: ranked.slice(0, 7).map((c, idx) => ({ ...c, confidence: idx === 0 ? 'medium' : 'low', needsConfirmation: true, scoreGap: Number((top.confidenceScore - c.confidenceScore).toFixed(3)) }))
     };
   }
-  return { state, product: top };
+  return { state, product: top, decisionReason, autoResolved };
 }
 async function searchWebCandidates(query) {
   const cached = cacheGet('webcand', query);
@@ -1376,13 +1404,21 @@ function dedupeCandidates(candidates) {
     return true;
   });
 }
+function cleanCandidateText(v, max = 180) {
+  return String(v || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\((open beauty facts|incidecoder|source:[^)]+)\)/ig, '')
+    .replace(/\s+\|\s+(official|reviews?|shop|store).*$/ig, '')
+    .trim()
+    .slice(0, max);
+}
 function mapBackendProduct(p) {
   if (!p) return null;
   return {
     productId: p.productId || '',
-    name: p.name || '',
-    brand: p.brand || '',
-    category: p.category || p.line || '',
+    name: cleanCandidateText(p.name || '', 180),
+    brand: cleanCandidateText(p.brand || '', 80),
+    category: cleanCandidateText(p.category || p.line || '', 100),
     img: p.imageUrl || '',
     ingredientsText: p.ingredientsText || '',
     ingredientsStatus: p.ingredientsStatus || (p.ingredientsText ? 'available' : 'missing'),
@@ -1391,6 +1427,10 @@ function mapBackendProduct(p) {
     ingredientFailureStage: p.ingredientFailureStage || '',
     confidence: p.confidence || 'low',
     needsConfirmation: !!p.needsConfirmation,
+    brandMatched: typeof p.brandMatched === 'boolean' ? p.brandMatched : null,
+    nameSimilarity: Number(p.nameSimilarity || 0),
+    brandSimilarity: Number(p.brandSimilarity || 0),
+    scoreGap: Number(p.scoreGap || 0),
     source: 'backend-index'
   };
 }
@@ -1435,6 +1475,8 @@ async function resolveProductFromBackend(query) {
       state: data.state,
       normalizedQuery: data.normalized_query || normalizeQuery(query),
       appliedFuzzyCorrection: Array.isArray(data.applied_corrections) && data.applied_corrections.length > 0,
+      decisionReason: data.decisionReason || '',
+      autoResolved: !!data.autoResolved,
       ingredientResolutionState: data.ingredientResolutionState || '',
       ingredientJobId: data.ingredientJobId || '',
       ingredientFailureStage: data.ingredientFailureStage || ''
@@ -1581,34 +1623,27 @@ async function retryIngredientFetch() {
 
 function showSuggestions(products, options = {}) {
   const confirmMode = !!options.confirmMode;
-  suggestionsEl._products = products;
-  if (confirmMode && products[0]) {
-    const p = products[0];
-    suggestionsEl.innerHTML = `
-      <div class="sug-item" onclick="pickProduct(0)">
+  const normalized = (products || []).map(p => ({
+    ...p,
+    name: cleanCandidateText(p.name || '', 180),
+    brand: cleanCandidateText(p.brand || '', 80),
+    category: cleanCandidateText(p.category || '', 100)
+  }));
+  suggestionsEl._products = normalized;
+  suggestionsEl.innerHTML = normalized.map((p, i) => {
+    const badgeText = confirmMode && i === 0 ? 'Confirm this product?' : (p.confidence || 'low').toUpperCase();
+    const badgeTone = confirmMode && i === 0 ? 'inci' : (p.confidence === 'high' ? 'obf' : 'inci');
+    return `
+      <div class="sug-item" onclick="pickProduct(${i})">
         ${p.img ? `<img class="sug-thumb" src="${escHtml(p.img)}" alt="" onerror="this.style.display='none'">` : `<div class="sug-thumb-empty">◈</div>`}
         <div class="sug-info">
-          <div class="sug-name">${escHtml(p.name)}</div>
-          ${p.brand?`<div class="sug-brand">${escHtml(p.brand)}</div>`:''}
-          ${p.category?`<div class="sug-brand">${escHtml(p.category)}</div>`:''}
+          <div class="sug-name">${escHtml([p.brand, p.name].filter(Boolean).join(' — ') || p.name || p.brand || 'Product')}</div>
+          ${p.category ? `<div class="sug-brand">${escHtml(p.category)}</div>` : ''}
           <div class="sug-brand">${p.ingredientsStatus === 'available' ? 'Ingredients available' : 'Ingredients not available yet'}</div>
         </div>
-        <span class="sug-badge inci">Confirm this product?</span>
+        <span class="sug-badge ${badgeTone}">${badgeText}</span>
       </div>`;
-    suggestionsEl.classList.add('show');
-    return;
-  }
-  suggestionsEl.innerHTML = products.map((p,i) => `
-    <div class="sug-item" onclick="pickProduct(${i})">
-      ${p.img ? `<img class="sug-thumb" src="${escHtml(p.img)}" alt="" onerror="this.style.display='none'">` : `<div class="sug-thumb-empty">◈</div>`}
-      <div class="sug-info">
-        <div class="sug-name">${escHtml(p.name)}</div>
-        ${p.brand?`<div class="sug-brand">${escHtml(p.brand)}</div>`:''}
-        ${p.category?`<div class="sug-brand">${escHtml(p.category)}</div>`:''}
-        <div class="sug-brand">${p.ingredientsStatus === 'available' ? 'Ingredients available' : 'Ingredients not available yet'}</div>
-      </div>
-      <span class="sug-badge ${p.confidence === 'high' ? 'obf' : 'inci'}">${(p.confidence || 'low').toUpperCase()}</span>
-    </div>`).join('');
+  }).join('');
   suggestionsEl.classList.add('show');
 }
 async function pickProduct(i) {
@@ -1950,13 +1985,21 @@ async function doScan() {
       document.getElementById('loading').classList.remove('show');
       document.getElementById('inputSection').style.display = '';
       showSuggestions(resolution.candidates || [], { confirmMode: false });
+      trackEvent('search_state_changed', { state: 'candidate_list', decisionReason: resolution.decisionReason || '' });
       return;
     }
     if (resolution.state === 'resolved_medium') {
       document.getElementById('loading').classList.remove('show');
       document.getElementById('inputSection').style.display = '';
       showSuggestions([resolution.product], { confirmMode: true });
-      trackEvent('product_confirmation_shown', { query: inputVal, confidence: 'medium' });
+      trackEvent('product_confirmation_shown', { query: inputVal, confidence: 'medium', decisionReason: resolution.decisionReason || '' });
+      return;
+    }
+    if (resolution.state === 'resolved_high' && resolution.autoResolved === false) {
+      document.getElementById('loading').classList.remove('show');
+      document.getElementById('inputSection').style.display = '';
+      showSuggestions([resolution.product], { confirmMode: true });
+      trackEvent('product_confirmation_shown', { query: inputVal, confidence: 'high_guarded', decisionReason: resolution.decisionReason || 'guarded_high' });
       return;
     }
     if (resolution.product?.ingredientResolutionState === 'resolving_sync' || resolution.product?.ingredientResolutionState === 'resolving_async') {

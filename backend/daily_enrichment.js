@@ -5,6 +5,7 @@ const path = require('path');
 const DATA_DIR = path.join(__dirname, 'data');
 const INDEX_PATH = path.join(DATA_DIR, 'product_index.json');
 const CATALOG_PATH = path.join(DATA_DIR, 'product_catalog.json');
+const BRAND_LEXICON_PATH = path.join(DATA_DIR, 'brand_lexicon.json');
 const MISS_PATH = path.join(DATA_DIR, 'coverage_miss_queue.json');
 const UNKNOWN_PATH = path.join(DATA_DIR, 'unknown_ingredient_queue.json');
 const LEARNED_SYNONYMS_PATH = path.join(DATA_DIR, 'ingredient_synonyms_learned.json');
@@ -39,6 +40,27 @@ function aliasFromName(name) {
   aliases.add(n.replace(/\bcream\b/g, '').trim());
   aliases.add(n.replace(/\bessence\b/g, '').trim());
   return [...aliases].filter(Boolean);
+}
+
+function overlapScore(query, text) {
+  const q = normalizeText(query).split(' ').filter(Boolean);
+  const t = normalizeText(text);
+  if (!q.length || !t) return 0;
+  const hits = q.filter(w => t.includes(w)).length;
+  return hits / q.length;
+}
+
+function buildBrandLexicon(products) {
+  const aliases = new Set();
+  (products || []).forEach(p => {
+    const brand = normalizeText(p.brand_canonical || '');
+    if (brand.length >= 3) aliases.add(brand);
+    (p.brand_aliases || []).forEach(alias => {
+      const a = normalizeText(alias);
+      if (a.length >= 3) aliases.add(a);
+    });
+  });
+  return [...aliases].sort();
 }
 
 function dedupeProducts(products) {
@@ -88,6 +110,7 @@ function main() {
   const ingredientProposals = readJson(INGREDIENT_PROPOSALS_PATH, { items: [] });
   const frontendOverrides = readJson(FRONTEND_INGREDIENT_OVERRIDES_PATH, { db: {}, aliases: {}, synonyms: {}, familyRules: [] });
   const promoted = [];
+  const unresolvedMisses = [];
   const promotedUnknowns = [];
   let autoApproved = 0;
 
@@ -117,11 +140,30 @@ function main() {
     }
   });
 
-  // Placeholder enrichment: append miss query as alias to nearest brand if possible.
+  const brandLexicon = buildBrandLexicon(index.products);
+
+  // Miss-driven lightweight enrichment: attach frequent queries as aliases only when nearest canonical product is clear.
   promoted.forEach(q => {
-    const match = index.products.find(p => normalizeText(q).includes(normalizeText(p.brand_canonical || '')));
-    if (!match) return;
-    match.name_aliases = [...new Set([...(match.name_aliases || []), q])];
+    const scored = index.products
+      .map(p => ({
+        product: p,
+        score: overlapScore(q, `${p.brand_canonical || ''} ${p.name_canonical || ''}`)
+      }))
+      .sort((a, b) => b.score - a.score);
+    const top = scored[0];
+    const second = scored[1];
+    const clearMatch = top && top.score >= 0.75 && (!second || (top.score - second.score) >= 0.14);
+    if (clearMatch) {
+      top.product.name_aliases = [...new Set([...(top.product.name_aliases || []), q])];
+      return;
+    }
+    const branded = brandLexicon.some(alias => q.startsWith(alias + ' ') || q === alias);
+    unresolvedMisses.push({
+      query: q,
+      count: missQueue.items.find(x => normalizeText(x.normalizedQuery || x.rawQuery || '') === q)?.count || 3,
+      branded,
+      lastSeenAt: missQueue.items.find(x => normalizeText(x.normalizedQuery || x.rawQuery || '') === q)?.lastSeenAt || new Date().toISOString()
+    });
   });
 
   // Promote frequently seen unknown ingredients into a review-driven learned synonyms file.
@@ -202,8 +244,13 @@ function main() {
 
   index.products = dedupeProducts(index.products);
   catalog.products = dedupeProducts(catalog.products);
+  catalog.miss_candidates = unresolvedMisses.slice(0, 200);
   index.last_updated = new Date().toISOString();
   catalog.last_updated = new Date().toISOString();
+  writeJson(BRAND_LEXICON_PATH, {
+    updated_at: new Date().toISOString(),
+    aliases: buildBrandLexicon(index.products)
+  });
   writeJson(INDEX_PATH, index);
   writeJson(CATALOG_PATH, catalog);
   writeJson(LEARNED_SYNONYMS_PATH, learned);
@@ -216,6 +263,8 @@ function main() {
     productCount: index.products.length,
     catalogCount: catalog.products.length,
     promotedMisses: promoted.length,
+    unresolvedMisses: unresolvedMisses.length,
+    brandLexiconSize: buildBrandLexicon(index.products).length,
     promotedUnknowns: promotedUnknowns.length,
     proposalCount: ingredientProposals.items.length,
     autoApproved
