@@ -337,6 +337,46 @@ function listProductTexts(p) {
   ].filter(Boolean);
 }
 
+function productBrandTokens(product) {
+  return [
+    normalizeText(product.brand_canonical || ''),
+    ...(product.brand_aliases || []).map(normalizeText)
+  ].filter(Boolean);
+}
+
+function detectBrandHint(query, catalogProducts) {
+  const q = normalizeText(query);
+  if (!q) return null;
+  let best = null;
+  const seen = new Set();
+  for (const product of catalogProducts || []) {
+    const canonical = normalizeText(product.brand_canonical || '');
+    const aliases = [...new Set([canonical, ...(product.brand_aliases || []).map(normalizeText)])].filter(Boolean);
+    for (const alias of aliases) {
+      if (alias.length < 3) continue;
+      if (seen.has(`${canonical}|${alias}`)) continue;
+      seen.add(`${canonical}|${alias}`);
+      if (!q.includes(alias)) continue;
+      const candidate = {
+        canonicalBrand: canonical,
+        matchedAlias: alias,
+        aliasLength: alias.length
+      };
+      if (!best || candidate.aliasLength > best.aliasLength) best = candidate;
+    }
+  }
+  return best;
+}
+
+function productMatchesBrandHint(product, brandHint) {
+  if (!brandHint) return true;
+  const tokens = productBrandTokens(product);
+  if (!tokens.length) return false;
+  if (tokens.some(t => t === brandHint.canonicalBrand || brandHint.canonicalBrand.includes(t) || t.includes(brandHint.canonicalBrand))) return true;
+  if (tokens.some(t => t === brandHint.matchedAlias || brandHint.matchedAlias.includes(t) || t.includes(brandHint.matchedAlias))) return true;
+  return false;
+}
+
 function normalizeIngredientText(raw) {
   if (!raw) return '';
   const scrubbed = String(raw)
@@ -388,7 +428,7 @@ function inferResolutionState(productId, product) {
   return 'unavailable_retryable';
 }
 
-function scoreProduct(query, product) {
+function scoreProduct(query, product, brandHint) {
   const texts = listProductTexts(product);
   const best = texts.reduce((m, t) => Math.max(m, overlapScore(query, t)), 0);
   const brand = overlapScore(query, product.brand_canonical || '');
@@ -397,10 +437,16 @@ function scoreProduct(query, product) {
   const recency = product.confidence_metadata?.freshness === 'daily' ? 0.04 : 0;
   const popularity = Number(product.confidence_metadata?.popularity || 0) * 0.06;
   const sourcePriority = Math.min((Number(product.source_priority || 50) / 100) * 0.06, 0.06);
-  return Math.max(0, Math.min(1, (best * 0.62) + (brand * 0.14) + (line * 0.08) + availBoost + recency + popularity + sourcePriority));
+  const brandMatched = productMatchesBrandHint(product, brandHint);
+  const brandGateBoost = brandHint ? (brandMatched ? 0.14 : -0.45) : 0;
+  const score = (best * 0.62) + (brand * 0.14) + (line * 0.08) + availBoost + recency + popularity + sourcePriority + brandGateBoost;
+  return {
+    score: Math.max(0, Math.min(1, score)),
+    brandMatched
+  };
 }
 
-function toResolvedProduct(product, score, confidence) {
+function toResolvedProduct(product, score, confidence, brandMatched = true) {
   const resolutionState = inferResolutionState(product.product_id, product);
   const job = ingredientJobs.get(product.product_id);
   return {
@@ -417,15 +463,29 @@ function toResolvedProduct(product, score, confidence) {
     ingredientFailureStage: job?.lastError || '',
     confidence,
     needsConfirmation: confidence !== 'high',
+    brandMatched: !!brandMatched,
     score: Number(score.toFixed(3))
   };
 }
 
-function classify(ranked) {
+function classify(ranked, options = {}) {
   if (!ranked.length) return { state: 'not_found' };
   const top = ranked[0];
   const second = ranked[1];
   const gap = second ? top.score - second.score : 1;
+  const brandHintPresent = !!options.brandHintPresent;
+  const topBrandMismatch = brandHintPresent && !top.brandMatched;
+  const ambiguousTop = second ? gap < 0.12 : false;
+  if (topBrandMismatch || ambiguousTop) {
+    return {
+      state: 'candidate_list',
+      candidates: ranked.slice(0, 7).map((c, i) => ({
+        ...c,
+        confidence: i === 0 ? 'medium' : 'low',
+        needsConfirmation: true
+      }))
+    };
+  }
   if (second && top.ingredientsStatus !== 'available' && second.ingredientsStatus === 'available' && gap < 0.08) {
     return {
       state: 'candidate_list',
@@ -659,13 +719,17 @@ function resolveAgainstCatalog(query, region, locale) {
   const { corrected, applied } = applyCorrections(normalizedQuery);
   const variants = generateVariants(corrected);
   const catalog = readCatalog();
+  const brandHint = detectBrandHint(corrected, catalog.products);
 
   let ranked = [];
   variants.forEach(v => {
     const scored = catalog.products
-      .map(p => ({ product: ensureProductSchema(p), score: scoreProduct(v, p) }))
-      .filter(s => s.score > 0.24)
-      .map(s => toResolvedProduct(s.product, s.score, 'low'));
+      .map(p => {
+        const result = scoreProduct(v, p, brandHint);
+        return { product: ensureProductSchema(p), score: result.score, brandMatched: result.brandMatched };
+      })
+      .filter(s => s.score > (brandHint ? 0.16 : 0.24))
+      .map(s => toResolvedProduct(s.product, s.score, 'low', s.brandMatched));
     ranked.push(...scored);
   });
 
@@ -675,12 +739,20 @@ function resolveAgainstCatalog(query, region, locale) {
     if (!prev || prev.score < r.score) dedup.set(r.productId, r);
   });
 
-  ranked = [...dedup.values()].sort((a, b) => b.score - a.score);
-  const classified = classify(ranked);
+  ranked = [...dedup.values()].sort((a, b) => {
+    if (!!a.brandMatched !== !!b.brandMatched) return a.brandMatched ? -1 : 1;
+    return b.score - a.score;
+  });
+  if (brandHint && ranked.some(r => r.brandMatched)) {
+    ranked = ranked.filter(r => r.brandMatched || r.score >= 0.72);
+  }
+
+  const classified = classify(ranked, { brandHintPresent: !!brandHint });
   return {
     ...classified,
     normalized_query: corrected,
     applied_corrections: applied,
+    brand_hint: brandHint?.canonicalBrand || '',
     region: region || '',
     locale: locale || ''
   };
@@ -1605,7 +1677,9 @@ async function handleResolveProducts(req, res) {
   pushMetric('search_confidence_assigned', {
     query: result.normalized_query,
     state: result.state,
-    confidence: result.product?.confidence || (result.candidates?.[0]?.confidence || 'low')
+    confidence: result.product?.confidence || (result.candidates?.[0]?.confidence || 'low'),
+    brandHint: result.brand_hint || '',
+    brandMatched: result.product?.brandMatched ?? null
   });
 
   sendJson(res, 200, result);
