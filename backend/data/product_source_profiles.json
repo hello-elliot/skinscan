@@ -1,0 +1,29 @@
+{
+  "products": {
+    "estee_lauder_anr_serum": {
+      "brand": [
+        "https://www.esteelauder.com/product/681/27592/product-catalog/skincare/serums/advanced-night-repair/advanced-night-repair-serum/synchronized-multi-recovery-complex"
+      ],
+      "retailer": [
+        "https://www.sephora.com/product/advanced-night-repair-synchronized-multi-recovery-complex-serum-P447527",
+        "https://www.ulta.com/p/advanced-night-repair-synchronized-multi-recovery-complex-serum-pimprod2015470"
+      ]
+    },
+    "dr_althea_345_relief_cream": {
+      "brand": [
+        "https://dralthea.com/products/345-relief-cream"
+      ],
+      "retailer": [
+        "https://www.yesstyle.com/en/dr-althea-345-relief-cream-50ml/info.html/pid.1123089783"
+      ]
+    },
+    "dr_althea_365_relief_essence": {
+      "brand": [
+        "https://dralthea.com/products/365-relief-essence"
+      ],
+      "retailer": [
+        "https://www.yesstyle.com/en/dr-althea-365-relief-essence-30ml/info.html/pid.1126427718"
+      ]
+    }
+  }
+}

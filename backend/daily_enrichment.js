@@ -5,6 +5,8 @@ const path = require('path');
 const DATA_DIR = path.join(__dirname, 'data');
 const INDEX_PATH = path.join(DATA_DIR, 'product_index.json');
 const MISS_PATH = path.join(DATA_DIR, 'coverage_miss_queue.json');
+const UNKNOWN_PATH = path.join(DATA_DIR, 'unknown_ingredient_queue.json');
+const LEARNED_SYNONYMS_PATH = path.join(DATA_DIR, 'ingredient_synonyms_learned.json');
 
 function readJson(filePath, fallback) {
   try {
@@ -59,7 +61,10 @@ function dedupeProducts(products) {
 function main() {
   const index = readJson(INDEX_PATH, { version: 1, last_updated: new Date().toISOString(), products: [] });
   const missQueue = readJson(MISS_PATH, { items: [] });
+  const unknownQueue = readJson(UNKNOWN_PATH, { items: [] });
+  const learned = readJson(LEARNED_SYNONYMS_PATH, { items: [] });
   const promoted = [];
+  const promotedUnknowns = [];
 
   index.products = index.products.map(p => ({
     ...p,
@@ -92,14 +97,34 @@ function main() {
     match.name_aliases = [...new Set([...(match.name_aliases || []), q])];
   });
 
+  // Promote frequently seen unknown ingredients into a review-driven learned synonyms file.
+  unknownQueue.items.forEach(item => {
+    if ((item.count || 0) < 3) return;
+    if (!item.normalizedToken) return;
+    const exists = learned.items.some(x => x.normalizedToken === item.normalizedToken);
+    if (exists) return;
+    learned.items.push({
+      normalizedToken: item.normalizedToken,
+      tokenHash: item.tokenHash,
+      canonicalId: '',
+      status: 'pending_review',
+      count: item.count,
+      firstSeenAt: item.firstSeenAt || new Date().toISOString(),
+      lastSeenAt: item.lastSeenAt || new Date().toISOString()
+    });
+    promotedUnknowns.push(item.normalizedToken);
+  });
+
   index.products = dedupeProducts(index.products);
   index.last_updated = new Date().toISOString();
   writeJson(INDEX_PATH, index);
+  writeJson(LEARNED_SYNONYMS_PATH, learned);
 
   console.log(JSON.stringify({
     ok: true,
     productCount: index.products.length,
-    promotedMisses: promoted.length
+    promotedMisses: promoted.length,
+    promotedUnknowns: promotedUnknowns.length
   }, null, 2));
 }
 

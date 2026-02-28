@@ -19,6 +19,11 @@ Override:
 RESOLVER_HOST=0.0.0.0 RESOLVER_PORT=8788 node backend/resolver_server.js
 ```
 
+Optional env:
+
+- `AI_PROXY_URL` (default: `https://skinscan-proxy.kelly-f.workers.dev`)
+- `AI_FALLBACK_ENABLED=true|false`
+
 ## Daily Enrichment Job
 
 ```bash
@@ -55,7 +60,9 @@ Output:
 }
 ```
 
-When `ingredientsStatus` is missing, backend starts async enrichment automatically.
+When `ingredientsStatus` is missing, backend runs a hybrid enrichment:
+- synchronous attempt up to 10s
+- async continuation with status polling path
 
 ### `POST /resolver/enrich-ingredients`
 
@@ -74,11 +81,21 @@ Returns:
 ```json
 {
   "productId": "estee_lauder_anr_serum",
-  "state": "available",
+  "state": "available | resolving_sync | resolving_async | unavailable_retryable | unavailable_final",
   "ingredientsStatus": "available",
   "ingredientsText": "Aqua, Bifida Ferment Lysate, ...",
-  "updatedAt": "2026-02-28T16:00:00.000Z"
+  "updatedAt": "2026-02-28T16:00:00.000Z",
+  "failureStage": "",
+  "attemptCount": 1
 }
+```
+
+### `POST /resolver/unknown-ingredients`
+
+Input:
+
+```json
+{ "items": ["HYDROXYPROPYL TETRAHYDROPYRANTRIOL"], "source": "resolver" }
 ```
 
 ### `GET /resolver/coverage-metrics`
@@ -92,3 +109,6 @@ Returns index stats, miss queue, and 24h resolver KPI snapshot.
 - `backend/data/resolver_metrics.json` telemetry aggregate events
 - `backend/data/source_cache.json` file-backed source cache (24h TTL)
 - `backend/data/canary_queries.json` canary search queries for regression checks
+- `backend/data/unknown_ingredient_queue.json` backend unknown-ingredient queue
+- `backend/data/ingredient_synonyms_learned.json` nightly review-driven synonym candidates
+- `backend/data/product_source_profiles.json` curated PDP sources for top products

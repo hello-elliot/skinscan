@@ -1339,8 +1339,9 @@ function mapBackendProduct(p) {
     img: p.imageUrl || '',
     ingredientsText: p.ingredientsText || '',
     ingredientsStatus: p.ingredientsStatus || (p.ingredientsText ? 'available' : 'missing'),
-    ingredientResolutionState: p.ingredientResolutionState || (p.ingredientsText ? 'available' : 'unavailable'),
+    ingredientResolutionState: p.ingredientResolutionState || (p.ingredientsText ? 'available' : 'unavailable_retryable'),
     ingredientJobId: p.ingredientJobId || p.productId || '',
+    ingredientFailureStage: p.ingredientFailureStage || '',
     confidence: p.confidence || 'low',
     needsConfirmation: !!p.needsConfirmation,
     source: 'backend-index'
@@ -1388,7 +1389,8 @@ async function resolveProductFromBackend(query) {
       normalizedQuery: data.normalized_query || normalizeQuery(query),
       appliedFuzzyCorrection: Array.isArray(data.applied_corrections) && data.applied_corrections.length > 0,
       ingredientResolutionState: data.ingredientResolutionState || '',
-      ingredientJobId: data.ingredientJobId || ''
+      ingredientJobId: data.ingredientJobId || '',
+      ingredientFailureStage: data.ingredientFailureStage || ''
     };
     if (data.product) mapped.product = mapBackendProduct(data.product);
     if (Array.isArray(data.candidates)) mapped.candidates = data.candidates.map(mapBackendProduct).filter(Boolean);
@@ -1408,7 +1410,6 @@ async function enrichCandidateIngredients(candidate) {
   if (candidate.source === 'backend-index' && candidate.productId) {
     const backendResolved = await tryBackendIngredientResolution(candidate, q);
     if (backendResolved?.ingredientsText) return backendResolved;
-    return candidate;
   }
   if (candidate.source === 'inci' && candidate.slug) {
     const inci = await fetchInciIngredients(candidate.slug);
@@ -1435,29 +1436,37 @@ async function pollIngredientsStatus(product, maxWaitMs = 8000, intervalMs = 150
             ...product,
             ingredientsText: data.ingredientsText,
             ingredientsStatus: 'available',
-            ingredientResolutionState: 'available'
+            ingredientResolutionState: 'available',
+            ingredientFailureStage: ''
           };
         }
-        if (data?.state === 'unavailable') return null;
+        if (data?.state === 'unavailable_final' || data?.state === 'unavailable_retryable') {
+          return { ...product, ingredientResolutionState: data.state, ingredientFailureStage: data.failureStage || '' };
+        }
       }
     } catch (_) {}
     await new Promise(resolve => setTimeout(resolve, intervalMs));
   }
   return null;
 }
-async function tryBackendIngredientResolution(product, queryText = '') {
+async function tryBackendIngredientResolution(product, queryText = '', options = {}) {
   if (!product?.productId) return null;
   try {
-    await fetch(resolverUrl('/resolver/enrich-ingredients'), {
+    const kickoff = await fetch(resolverUrl('/resolver/enrich-ingredients'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         productId: product.productId,
         query: queryText || [product.brand, product.name].filter(Boolean).join(' ').trim(),
+        forceRetry: !!options.forceRetry,
         locale: navigator.language || 'en-US',
         region: ((navigator.language || 'en-US').split('-')[1] || '').toUpperCase()
       })
     });
+    if (kickoff.ok) {
+      const data = await kickoff.json();
+      if (data?.ingredientResolutionState === 'available') return pollIngredientsStatus(product, 1200, 600);
+    }
   } catch (_) {}
   return pollIngredientsStatus(product, 8000, 1500);
 }
@@ -1477,7 +1486,7 @@ async function showProductNeedsIngredients(product, options = {}) {
       <div class="not-found-title">Ingredients not available yet</div>
       <div class="not-found-desc">
         <strong>${escHtml([product.brand, product.name].filter(Boolean).join(' ') || 'Selected product')}</strong><br>
-        We found this product and tried retrieving ingredients, but couldn't get a complete list yet.
+        We found this product and tried retrieving ingredients, but could not complete the list yet.
       </div>
       <div style="margin-top:10px;font-size:12.5px;color:rgba(26,20,16,0.65)">
         You can retry fetch, or paste the ingredient list to analyze now.
@@ -1493,7 +1502,7 @@ async function retryIngredientFetch() {
   document.getElementById('results').classList.remove('show');
   document.getElementById('loading').classList.add('show');
   setLoading('Found product. Retrieving ingredients…', 'This usually takes a few seconds');
-  const resolved = await tryBackendIngredientResolution(selectedProduct);
+  const resolved = await tryBackendIngredientResolution(selectedProduct, '', { forceRetry: true });
   if (resolved?.ingredientsText) {
     trackEvent('analysis_autostart_after_enrichment', { productId: selectedProduct.productId, name: resolved.name || selectedProduct.name });
     await runAnalysis(resolved.name || selectedProduct.name, resolved.brand || selectedProduct.brand || '', resolved.ingredientsText, 'resolver', resolved.img || selectedProduct.img || '', resolved.category || selectedProduct.category || '');
@@ -1884,7 +1893,7 @@ async function doScan() {
       trackEvent('product_confirmation_shown', { query: inputVal, confidence: 'medium' });
       return;
     }
-    if (resolution.product?.ingredientResolutionState === 'resolving') {
+    if (resolution.product?.ingredientResolutionState === 'resolving_sync' || resolution.product?.ingredientResolutionState === 'resolving_async') {
       setLoading('Found product. Retrieving ingredients…', 'This usually takes a few seconds');
     }
     const resolved = await enrichCandidateIngredients(resolution.product);
@@ -1989,11 +1998,13 @@ function updateUnknownQueue(normalizedToken) {
 }
 function logUnknownIngredients(unknownIngredients, source) {
   const seen = new Set();
+  const outbound = [];
   for (const raw of unknownIngredients || []) {
     const normalized = normalizeIngredient(raw || '');
     if (!normalized || seen.has(normalized)) continue;
     seen.add(normalized);
     const queueRecord = updateUnknownQueue(normalized);
+    outbound.push(normalized);
     trackEvent('unknown_ingredient_seen', {
       tokenHash: hashString(normalized),
       normalizedToken: normalized,
@@ -2001,6 +2012,13 @@ function logUnknownIngredients(unknownIngredients, source) {
       source,
       ts: new Date().toISOString()
     });
+  }
+  if (outbound.length) {
+    fetch(resolverUrl('/resolver/unknown-ingredients'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: outbound, source: source || 'client' })
+    }).catch(() => {});
   }
 }
 
