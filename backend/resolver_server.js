@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const HOST = process.env.RESOLVER_HOST || '127.0.0.1';
-const PORT = Number(process.env.RESOLVER_PORT || 8788);
+const PORT = Number(process.env.PORT || process.env.RESOLVER_PORT || 8788);
 
 const DATA_DIR = path.join(__dirname, 'data');
 const INDEX_PATH = path.join(DATA_DIR, 'product_index.json');
@@ -373,6 +373,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && req.url === '/resolver/coverage-metrics') {
       handleCoverageMetrics(req, res);
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/healthz') {
+      sendJson(res, 200, { ok: true });
       return;
     }
     sendJson(res, 404, { error: 'not_found' });

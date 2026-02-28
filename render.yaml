@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: skinscan-resolver-api
+    runtime: node
+    plan: starter
+    region: frankfurt
+    branch: codex/coverage-reliability-backend
+    rootDir: .
+    buildCommand: "echo 'No build step required'"
+    startCommand: "node backend/resolver_server.js"
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RESOLVER_HOST
+        value: 0.0.0.0
