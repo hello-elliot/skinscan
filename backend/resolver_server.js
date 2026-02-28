@@ -15,6 +15,8 @@ const MISS_PATH = path.join(DATA_DIR, 'coverage_miss_queue.json');
 const METRICS_PATH = path.join(DATA_DIR, 'resolver_metrics.json');
 const SOURCE_CACHE_PATH = path.join(DATA_DIR, 'source_cache.json');
 const UNKNOWN_QUEUE_PATH = path.join(DATA_DIR, 'unknown_ingredient_queue.json');
+const CANDIDATE_FEEDBACK_PATH = path.join(DATA_DIR, 'candidate_feedback_queue.json');
+const NEGATIVE_ALIAS_RULES_PATH = path.join(DATA_DIR, 'negative_alias_rules.json');
 const SOURCE_PROFILE_PATH = path.join(DATA_DIR, 'product_source_profiles.json');
 const INGREDIENT_KNOWLEDGE_PATH = path.join(DATA_DIR, 'ingredient_knowledge.json');
 const INGREDIENT_PROPOSALS_PATH = path.join(DATA_DIR, 'ingredient_proposals.json');
@@ -29,6 +31,7 @@ const CIRCUIT_FAIL_THRESHOLD = 3;
 const AI_PROXY_URL = process.env.AI_PROXY_URL || 'https://skinscan-proxy.kelly-f.workers.dev';
 const AI_FALLBACK_ENABLED = String(process.env.AI_FALLBACK_ENABLED || 'true').toLowerCase() !== 'false';
 const AUTO_RESOLVE_ENABLED = String(process.env.AUTO_RESOLVE_ENABLED || 'true').toLowerCase() !== 'false';
+const STRICT_BRAND_GATE_ENABLED = String(process.env.STRICT_BRAND_GATE_ENABLED || 'true').toLowerCase() !== 'false';
 
 const GENERIC_PRODUCT_TOKENS = new Set([
   'serum', 'cream', 'cleanser', 'toner', 'essence', 'mask', 'moisturizer', 'moisturising', 'moisturizing',
@@ -158,6 +161,36 @@ function readJson(filePath, fallback) {
 
 function writeJson(filePath, value) {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+}
+
+function readCandidateFeedbackQueue() {
+  return readJson(CANDIDATE_FEEDBACK_PATH, { items: [] });
+}
+
+function writeCandidateFeedbackQueue(queue) {
+  writeJson(CANDIDATE_FEEDBACK_PATH, {
+    items: Array.isArray(queue.items) ? queue.items : []
+  });
+}
+
+function readNegativeAliasRules() {
+  const payload = readJson(NEGATIVE_ALIAS_RULES_PATH, { rules: {} });
+  return payload && typeof payload.rules === 'object' && payload.rules ? payload.rules : {};
+}
+
+function utcDay(iso = nowIso()) {
+  return String(iso).slice(0, 10);
+}
+
+function trimDailyBuckets(map = {}, keepDays = 35) {
+  const keys = Object.keys(map || {}).sort();
+  if (keys.length <= keepDays) return map || {};
+  const drop = new Set(keys.slice(0, keys.length - keepDays));
+  const out = {};
+  keys.forEach(k => {
+    if (!drop.has(k)) out[k] = Number(map[k] || 0);
+  });
+  return out;
 }
 
 function nowIso() {
@@ -450,6 +483,13 @@ function cleanDisplayText(value, maxLen = 180) {
     .slice(0, maxLen);
 }
 
+function blockedProductSetForQuery(query, negativeRules = {}) {
+  const key = normalizeText(query);
+  if (!key) return new Set();
+  const ids = Array.isArray(negativeRules[key]) ? negativeRules[key] : [];
+  return new Set(ids.map(String));
+}
+
 function normalizeIngredientText(raw) {
   if (!raw) return '';
   const scrubbed = String(raw)
@@ -544,6 +584,7 @@ function toResolvedProduct(product, scoring, confidence = 'low') {
     nameSimilarity: Number(scoring.nameSimilarity || 0),
     brandSimilarity: Number(scoring.brandSimilarity || 0),
     exactNameMatch: !!scoring.exactNameMatch,
+    negativeRuleBlocked: !!scoring.blockedByNegativeRule,
     scoreGap: 0,
     score: Number(scoring.score.toFixed(3))
   };
@@ -582,8 +623,10 @@ function classify(ranked, options = {}) {
   const brandHintPresent = !!options.brandHintPresent;
   const unknownBrandLikely = !!options.unknownBrandLikely;
   const autoResolveEnabled = options.autoResolveEnabled !== false;
+  const strictBrandGateEnabled = options.strictBrandGateEnabled !== false;
   const topBrandMismatch = brandHintPresent && !top.brandMatched;
   const weakBrandSignal = !brandHintPresent && top.brandSimilarity < 0.45;
+  const strictLowBrandSignal = !brandHintPresent && top.brandSimilarity < 0.55;
   const ambiguousTop = second ? gap < 0.12 : false;
   const highQuality = (
     top.score >= 0.86 &&
@@ -595,6 +638,9 @@ function classify(ranked, options = {}) {
   const exactHigh = highQuality && (top.exactNameMatch || top.nameSimilarity >= 0.92);
 
   if (unknownBrandLikely && weakBrandSignal) return asCandidateList(rankedWithGaps, 'unknown_brand');
+  if (strictBrandGateEnabled && strictLowBrandSignal && top.nameSimilarity < 0.9) {
+    return asCandidateList(rankedWithGaps, 'unknown_brand');
+  }
   if (topBrandMismatch) return asCandidateList(rankedWithGaps, 'brand_mismatch');
   if (ambiguousTop) return asCandidateList(rankedWithGaps, 'low_gap');
   if (second && top.ingredientsStatus !== 'available' && second.ingredientsStatus === 'available' && gap < 0.08) {
@@ -618,7 +664,7 @@ function classify(ranked, options = {}) {
     };
   }
 
-  if (top.score >= 0.67 && top.nameSimilarity >= 0.58 && !topBrandMismatch) {
+  if (top.score >= 0.67 && top.nameSimilarity >= 0.58 && !topBrandMismatch && (!strictBrandGateEnabled || top.brandSimilarity >= 0.45 || brandHintPresent)) {
     return {
       state: 'resolved_medium',
       decisionReason: 'ambiguous',
@@ -663,15 +709,168 @@ function upsertMiss(rawQuery, normalizedQuery, failureStage, details) {
       count: 0,
       firstSeenAt: now,
       lastSeenAt: now,
+      decisionReason: '',
+      brandMismatchFlag: false,
+      topCandidates: [],
       details: {}
     };
     queue.items.push(item);
   }
   item.count += 1;
   item.lastSeenAt = now;
+  if (details?.decisionReason) item.decisionReason = String(details.decisionReason);
+  if (typeof details?.brandMismatchFlag === 'boolean') item.brandMismatchFlag = details.brandMismatchFlag;
+  if (Array.isArray(details?.topCandidates)) {
+    item.topCandidates = details.topCandidates
+      .slice(0, 5)
+      .map(c => ({
+        productId: String(c.productId || ''),
+        brand: String(c.brand || ''),
+        name: String(c.name || ''),
+        score: Number(c.score || 0)
+      }));
+  }
   item.details = { ...item.details, ...details };
   writeJson(MISS_PATH, queue);
   return item;
+}
+
+function topCandidatesFromResolution(result, limit = 3) {
+  const candidates = Array.isArray(result?.candidates)
+    ? result.candidates.slice(0, limit)
+    : (result?.product ? [result.product] : []);
+  return candidates.map(c => ({
+    productId: String(c.productId || ''),
+    brand: String(c.brand || ''),
+    name: String(c.name || ''),
+    score: Number(c.score || 0)
+  }));
+}
+
+function upsertCandidateSelectionFeedback(payload) {
+  const queue = readCandidateFeedbackQueue();
+  const now = nowIso();
+  const normalizedQuery = normalizeText(payload.normalizedQuery || payload.query || '');
+  const selectedProductId = String(payload.selectedProductId || '').trim();
+  if (!normalizedQuery || !selectedProductId) {
+    return { ok: false, reason: 'invalid_payload' };
+  }
+
+  const queryHash = Buffer.from(normalizedQuery).toString('hex').slice(0, 16);
+  const rawQuery = String(payload.query || '').trim();
+  const selectionContext = ['search', 'suggestions', 'retry'].includes(String(payload.selectionContext || ''))
+    ? String(payload.selectionContext)
+    : 'search';
+  const shownCandidateProductIds = Array.isArray(payload.shownCandidateProductIds)
+    ? payload.shownCandidateProductIds.map(String).filter(Boolean).slice(0, 10)
+    : [];
+  const analysisStarted = !!payload.analysisStarted;
+  const analysisSucceeded = !!payload.analysisSucceeded;
+  const dayKey = utcDay(now);
+
+  let item = queue.items.find(x => x.normalizedQuery === normalizedQuery);
+  if (!item) {
+    item = {
+      queryHash,
+      normalizedQuery,
+      rawQuerySamples: [],
+      firstSeenAt: now,
+      lastSeenAt: now,
+      totalSelections: 0,
+      contextCounts: {},
+      shownCandidateProductIds: [],
+      dailySelections: {},
+      mappingStats: {}
+    };
+    queue.items.push(item);
+  }
+
+  item.totalSelections = Number(item.totalSelections || 0) + 1;
+  item.lastSeenAt = now;
+  item.rawQuerySamples = [...new Set([...(item.rawQuerySamples || []), rawQuery].filter(Boolean))].slice(0, 10);
+  item.contextCounts = item.contextCounts || {};
+  item.contextCounts[selectionContext] = Number(item.contextCounts[selectionContext] || 0) + 1;
+  item.shownCandidateProductIds = [...new Set([...(item.shownCandidateProductIds || []), ...shownCandidateProductIds])].slice(0, 20);
+  item.dailySelections = trimDailyBuckets({
+    ...(item.dailySelections || {}),
+    [dayKey]: Number((item.dailySelections || {})[dayKey] || 0) + 1
+  });
+  item.mappingStats = item.mappingStats || {};
+
+  if (!item.mappingStats[selectedProductId]) {
+    item.mappingStats[selectedProductId] = {
+      productId: selectedProductId,
+      count: 0,
+      shownCount: 0,
+      analysisStarted: 0,
+      analysisSucceeded: 0,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      dailySelections: {}
+    };
+  }
+
+  shownCandidateProductIds.forEach(pid => {
+    if (!pid) return;
+    if (!item.mappingStats[pid]) {
+      item.mappingStats[pid] = {
+        productId: pid,
+        count: 0,
+        shownCount: 0,
+        analysisStarted: 0,
+        analysisSucceeded: 0,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        dailySelections: {}
+      };
+    }
+    item.mappingStats[pid].shownCount = Number(item.mappingStats[pid].shownCount || 0) + 1;
+    item.mappingStats[pid].lastSeenAt = now;
+  });
+
+  const selectedStats = item.mappingStats[selectedProductId];
+  selectedStats.count = Number(selectedStats.count || 0) + 1;
+  if (analysisStarted) selectedStats.analysisStarted = Number(selectedStats.analysisStarted || 0) + 1;
+  if (analysisSucceeded) selectedStats.analysisSucceeded = Number(selectedStats.analysisSucceeded || 0) + 1;
+  selectedStats.lastSeenAt = now;
+  selectedStats.dailySelections = trimDailyBuckets({
+    ...(selectedStats.dailySelections || {}),
+    [dayKey]: Number((selectedStats.dailySelections || {})[dayKey] || 0) + 1
+  });
+
+  writeCandidateFeedbackQueue(queue);
+  return {
+    ok: true,
+    normalizedQuery,
+    selectedProductId,
+    totalSelections: item.totalSelections
+  };
+}
+
+function runResolverContractSmokeCheck() {
+  const checks = [];
+  const sampleQueries = [
+    'estee lauder advanced night repair serum',
+    'dr althea 345 relief cream',
+    'allies of skin molecular silk amino hydrating cleanser'
+  ];
+  for (const query of sampleQueries) {
+    const result = resolveAgainstCatalog(query, 'US', 'en-US');
+    const hasDecisionReason = typeof result.decisionReason === 'string' && result.decisionReason.length > 0;
+    const hasAutoResolved = typeof result.autoResolved === 'boolean';
+    checks.push({
+      query,
+      state: result.state,
+      hasDecisionReason,
+      hasAutoResolved,
+      ok: hasDecisionReason && hasAutoResolved
+    });
+  }
+  return {
+    ok: checks.every(c => c.ok),
+    checked: checks.length,
+    checks
+  };
 }
 
 function upsertUnknownIngredient(token, source = 'resolver', sourceProductId = '') {
@@ -716,6 +915,10 @@ function writeIndex(index) {
 
 function asCatalogProduct(product) {
   if (!product) return null;
+  const aliasConfidence = (product.alias_confidence && typeof product.alias_confidence === 'object')
+    ? product.alias_confidence
+    : {};
+  const aliasSources = Array.isArray(product.alias_sources) ? [...new Set(product.alias_sources.map(String))] : [];
   return {
     product_id: product.product_id || slugifyProductId(product.brand_canonical, product.name_canonical),
     brand_canonical: product.brand_canonical || '',
@@ -738,7 +941,11 @@ function asCatalogProduct(product) {
       updated_at: product.confidence_metadata?.updated_at || nowIso(),
       popularity: Number(product.confidence_metadata?.popularity || 0.3)
     },
-    source_urls: Array.isArray(product.source_urls) ? [...new Set(product.source_urls)] : []
+    source_urls: Array.isArray(product.source_urls) ? [...new Set(product.source_urls)] : [],
+    alias_confidence: aliasConfidence,
+    alias_sources: aliasSources,
+    last_alias_hit_at: product.last_alias_hit_at || '',
+    promotion_metadata: (product.promotion_metadata && typeof product.promotion_metadata === 'object') ? product.promotion_metadata : {}
   };
 }
 
@@ -789,7 +996,16 @@ function upsertCatalogProducts(products = []) {
       ...product,
       name_aliases: [...new Set([...(prev.name_aliases || []), ...(product.name_aliases || [])])],
       brand_aliases: [...new Set([...(prev.brand_aliases || []), ...(product.brand_aliases || [])])],
-      source_urls: [...new Set([...(prev.source_urls || []), ...(product.source_urls || [])])]
+      source_urls: [...new Set([...(prev.source_urls || []), ...(product.source_urls || [])])],
+      alias_confidence: {
+        ...(prev.alias_confidence || {}),
+        ...(product.alias_confidence || {})
+      },
+      alias_sources: [...new Set([...(prev.alias_sources || []), ...(product.alias_sources || [])])],
+      promotion_metadata: {
+        ...(prev.promotion_metadata || {}),
+        ...(product.promotion_metadata || {})
+      }
     };
     changed += 1;
   }
@@ -837,6 +1053,8 @@ function resolveAgainstCatalog(query, region, locale) {
   const { corrected, applied } = applyCorrections(normalizedQuery);
   const variants = generateVariants(corrected);
   const catalog = readCatalog();
+  const negativeRules = readNegativeAliasRules();
+  const blockedByQuery = blockedProductSetForQuery(corrected, negativeRules);
   const brandLexicon = readBrandLexicon(catalog.products);
   const brandHint = detectBrandHint(corrected, catalog.products, brandLexicon);
   const brandSignal = queryLooksBranded(corrected, brandHint, brandLexicon);
@@ -846,7 +1064,13 @@ function resolveAgainstCatalog(query, region, locale) {
     const scored = catalog.products
       .map(p => {
         const result = scoreProduct(v, p, brandHint);
-        return { product: ensureProductSchema(p), ...result };
+        const blockedByNegativeRule = blockedByQuery.has(String(p.product_id || ''));
+        if (blockedByNegativeRule) result.score = Math.max(0, result.score - 0.35);
+        return {
+          product: ensureProductSchema(p),
+          ...result,
+          blockedByNegativeRule
+        };
       })
       .filter(s => s.score > (brandHint ? 0.16 : 0.24))
       .map(s => toResolvedProduct(s.product, s, 'low'));
@@ -870,7 +1094,8 @@ function resolveAgainstCatalog(query, region, locale) {
   const classified = classify(ranked, {
     brandHintPresent: !!brandHint,
     unknownBrandLikely: brandSignal.unknownBrandLikely,
-    autoResolveEnabled: AUTO_RESOLVE_ENABLED
+    autoResolveEnabled: AUTO_RESOLVE_ENABLED,
+    strictBrandGateEnabled: STRICT_BRAND_GATE_ENABLED
   });
   return {
     ...classified,
@@ -878,6 +1103,7 @@ function resolveAgainstCatalog(query, region, locale) {
     applied_corrections: applied,
     brand_hint: brandHint?.canonicalBrand || '',
     autoResolveEnabled: AUTO_RESOLVE_ENABLED,
+    strictBrandGateEnabled: STRICT_BRAND_GATE_ENABLED,
     region: region || '',
     locale: locale || ''
   };
@@ -1794,7 +2020,13 @@ async function handleResolveProducts(req, res) {
   if (!result.decisionReason) result.decisionReason = 'ambiguous';
 
   if (result.state === 'not_found') {
-    const miss = upsertMiss(query, result.normalized_query, 'no_candidates', { region, locale });
+    const miss = upsertMiss(query, result.normalized_query, 'no_candidates', {
+      region,
+      locale,
+      decisionReason: result.decisionReason || 'ambiguous',
+      brandMismatchFlag: false,
+      topCandidates: topCandidatesFromResolution(result, 3)
+    });
     pushMetric('resolver_not_found', { query: result.normalized_query, missCount: miss.count });
     sendJson(res, 200, result);
     return;
@@ -1811,11 +2043,13 @@ async function handleResolveProducts(req, res) {
     upsertMiss(query, result.normalized_query, stageMap[result.decisionReason] || 'low_confidence', {
       region,
       locale,
+      topCandidates: topCandidatesFromResolution(result, 3),
       topProductId: top?.productId || '',
       topBrand: top?.brand || '',
       topName: top?.name || '',
       topScore: top?.score || 0,
-      decisionReason: result.decisionReason
+      decisionReason: result.decisionReason,
+      brandMismatchFlag: result.decisionReason === 'brand_mismatch'
     });
   }
 
@@ -1940,6 +2174,44 @@ async function handleEnrichIngredients(req, res) {
   });
 }
 
+async function handleCandidateSelectionFeedback(req, res) {
+  const body = await readBody(req);
+  const query = String(body.query || '').trim();
+  const normalizedQuery = String(body.normalizedQuery || '').trim();
+  const selectedProductId = String(body.selectedProductId || '').trim();
+  if (!query && !normalizedQuery) {
+    sendJson(res, 400, { error: 'query_required' });
+    return;
+  }
+  if (!selectedProductId) {
+    sendJson(res, 400, { error: 'selectedProductId_required' });
+    return;
+  }
+
+  const feedback = upsertCandidateSelectionFeedback({
+    query,
+    normalizedQuery,
+    shownCandidateProductIds: Array.isArray(body.shownCandidateProductIds) ? body.shownCandidateProductIds : [],
+    selectedProductId,
+    selectionContext: String(body.selectionContext || 'search').trim(),
+    analysisStarted: !!body.analysisStarted,
+    analysisSucceeded: !!body.analysisSucceeded
+  });
+  if (!feedback.ok) {
+    sendJson(res, 400, { error: feedback.reason || 'invalid_payload' });
+    return;
+  }
+  pushMetric('candidate_selection_feedback_received', {
+    normalizedQuery: feedback.normalizedQuery,
+    selectedProductId: feedback.selectedProductId,
+    totalSelections: feedback.totalSelections,
+    selectionContext: String(body.selectionContext || 'search').trim(),
+    analysisStarted: !!body.analysisStarted,
+    analysisSucceeded: !!body.analysisSucceeded
+  });
+  sendJson(res, 200, { ok: true, ...feedback });
+}
+
 async function handleUnknownIngredients(req, res) {
   const body = await readBody(req);
   const items = Array.isArray(body.items) ? body.items : [];
@@ -2057,10 +2329,12 @@ async function handleUnknownIngredientsApply(req, res) {
 function handleCoverageMetrics(_req, res) {
   const miss = readJson(MISS_PATH, { items: [] });
   const metrics = readJson(METRICS_PATH, { events: [] });
+  const feedbackQueue = readCandidateFeedbackQueue();
   const index = readIndex();
   const catalog = readCatalog();
   const unknown = readJson(UNKNOWN_QUEUE_PATH, { items: [] });
   const proposals = readIngredientProposals();
+  const contractCheck = runResolverContractSmokeCheck();
   const last24h = Date.now() - (24 * 60 * 60 * 1000);
   const recentEvents = metrics.events.filter(e => Date.parse(e.ts) >= last24h);
   const resolved = recentEvents.filter(e => e.name === 'resolver_resolved').length;
@@ -2080,8 +2354,20 @@ function handleCoverageMetrics(_req, res) {
   const wrongAutoSelectionRate = autoResolvedEvents.length ? autoResolvedWrong / autoResolvedEvents.length : 0;
   const candidateListRate = confidenceEvents.length ? candidateListCount / confidenceEvents.length : 0;
   const notFoundRate = (resolved + noMatchCount) ? noMatchCount / (resolved + noMatchCount) : 0;
+  const feedbackRecent = feedbackQueue.items.filter(x => Date.parse(x.lastSeenAt || 0) >= last24h);
+  const confirmToAnalysisRate = (() => {
+    let selections = 0;
+    let succeeded = 0;
+    feedbackRecent.forEach(item => {
+      Object.values(item.mappingStats || {}).forEach(stat => {
+        selections += Number(stat.count || 0);
+        succeeded += Number(stat.analysisSucceeded || 0);
+      });
+    });
+    return selections ? (succeeded / selections) : 0;
+  })();
 
-  sendJson(res, 200, {
+  const payload = {
     index: {
       productCount: index.products.length,
       catalogCount: catalog.products.length,
@@ -2092,11 +2378,14 @@ function handleCoverageMetrics(_req, res) {
       topMisses: [...miss.items].sort((a, b) => b.count - a.count).slice(0, 10),
       unknownCount: unknown.items.length,
       topUnknown: [...unknown.items].sort((a, b) => b.count - a.count).slice(0, 10),
+      candidateFeedbackCount: feedbackQueue.items.length,
+      candidateFeedbackRecent24h: feedbackRecent.length,
       proposalCount: proposals.items.length,
       proposalPending: proposals.items.filter(x => x.state === 'proposed').length,
       proposalApproved: proposals.items.filter(x => x.state === 'approved_auto' || x.state === 'approved_manual').length
     },
-    kpi: {
+    contract: contractCheck,
+    kpi: contractCheck.ok ? {
       resolverFoundRate24h: Number(foundRate.toFixed(4)),
       resolverNotFound24h: notFound,
       resolverResolved24h: resolved,
@@ -2104,12 +2393,15 @@ function handleCoverageMetrics(_req, res) {
       wrongAutoSelectionRate24h: Number(wrongAutoSelectionRate.toFixed(4)),
       candidateListRate24h: Number(candidateListRate.toFixed(4)),
       notFoundRate24h: Number(notFoundRate.toFixed(4)),
+      confirmToAnalysisRate24h: Number(confirmToAnalysisRate.toFixed(4)),
       ingredientResolveStarted24h: enrichStarted,
       ingredientResolveSucceeded24h: enrichSucceeded,
       ingredientResolveFailed24h: enrichFailed,
       ingredientResolveSuccessRate24h: enrichStarted ? Number((enrichSucceeded / enrichStarted).toFixed(4)) : 1
-    }
-  });
+    } : null
+  };
+  if (!contractCheck.ok) payload.error = 'contract_check_failed';
+  sendJson(res, 200, payload);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -2128,6 +2420,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && (url.pathname === '/resolver/ingredients/enrich' || url.pathname === '/resolver/enrich-ingredients')) {
       await handleEnrichIngredients(req, res);
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/resolver/feedback/candidate-selection') {
+      await handleCandidateSelectionFeedback(req, res);
       return;
     }
 
@@ -2157,6 +2454,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'GET' && url.pathname === '/resolver/smoke-check') {
+      const contract = runResolverContractSmokeCheck();
+      sendJson(res, contract.ok ? 200 : 503, contract);
+      return;
+    }
+
     if (req.method === 'GET' && url.pathname === '/healthz') {
       pruneSourceCache();
       sendJson(res, 200, { ok: true });
@@ -2169,10 +2472,13 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         budgets: { syncMs: SYNC_ENRICH_BUDGET_MS, asyncPollMs: ASYNC_POLL_BUDGET_MS },
         autoResolveEnabled: AUTO_RESOLVE_ENABLED,
+        strictBrandGateEnabled: STRICT_BRAND_GATE_ENABLED,
         endpoints: [
           '/healthz',
           '/resolver/products',
           '/resolver/coverage-metrics',
+          '/resolver/smoke-check',
+          '/resolver/feedback/candidate-selection',
           '/resolver/unknown-ingredients',
           '/resolver/unknown-ingredients/propose',
           '/resolver/unknown-ingredients/apply'

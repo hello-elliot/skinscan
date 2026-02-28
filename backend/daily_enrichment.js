@@ -7,6 +7,10 @@ const INDEX_PATH = path.join(DATA_DIR, 'product_index.json');
 const CATALOG_PATH = path.join(DATA_DIR, 'product_catalog.json');
 const BRAND_LEXICON_PATH = path.join(DATA_DIR, 'brand_lexicon.json');
 const MISS_PATH = path.join(DATA_DIR, 'coverage_miss_queue.json');
+const FEEDBACK_PATH = path.join(DATA_DIR, 'candidate_feedback_queue.json');
+const NEGATIVE_ALIAS_RULES_PATH = path.join(DATA_DIR, 'negative_alias_rules.json');
+const PROMOTION_REPORT_PATH = path.join(DATA_DIR, 'promotion_report.json');
+const REVIEW_QUEUE_PATH = path.join(DATA_DIR, 'review_queue.json');
 const UNKNOWN_PATH = path.join(DATA_DIR, 'unknown_ingredient_queue.json');
 const LEARNED_SYNONYMS_PATH = path.join(DATA_DIR, 'ingredient_synonyms_learned.json');
 const INGREDIENT_KNOWLEDGE_PATH = path.join(DATA_DIR, 'ingredient_knowledge.json');
@@ -63,6 +67,42 @@ function buildBrandLexicon(products) {
   return [...aliases].sort();
 }
 
+function generateAliasVariants(query) {
+  const q = normalizeText(query);
+  const out = new Set([q]);
+  out.add(q.replace(/\bserum\b/g, '').trim());
+  out.add(q.replace(/\bcream\b/g, '').trim());
+  out.add(q.replace(/\bessence\b/g, '').trim());
+  out.add(q.replace(/\s+/g, ' ').trim());
+  return [...out].filter(Boolean);
+}
+
+function countRecentSelections(dailySelections = {}, days = 1) {
+  const now = new Date();
+  let total = 0;
+  Object.entries(dailySelections || {}).forEach(([day, count]) => {
+    const dt = new Date(`${day}T00:00:00Z`);
+    const ageDays = Math.floor((now - dt) / (24 * 60 * 60 * 1000));
+    if (ageDays >= 0 && ageDays < days) total += Number(count || 0);
+  });
+  return total;
+}
+
+function ensureCatalogAliasMetadata(product) {
+  product.alias_confidence = (product.alias_confidence && typeof product.alias_confidence === 'object') ? product.alias_confidence : {};
+  product.alias_sources = Array.isArray(product.alias_sources) ? product.alias_sources : [];
+  product.promotion_metadata = (product.promotion_metadata && typeof product.promotion_metadata === 'object') ? product.promotion_metadata : {};
+  product.last_alias_hit_at = product.last_alias_hit_at || '';
+}
+
+function isOlderThanDays(iso, days) {
+  if (!iso) return false;
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return false;
+  const ageMs = Date.now() - ts;
+  return ageMs > days * 24 * 60 * 60 * 1000;
+}
+
 function dedupeProducts(products) {
   const byKey = new Map();
   products.forEach(p => {
@@ -104,6 +144,8 @@ function main() {
   const index = readJson(INDEX_PATH, { version: 1, last_updated: new Date().toISOString(), products: [] });
   const catalog = readJson(CATALOG_PATH, { version: 1, last_updated: new Date().toISOString(), products: [] });
   const missQueue = readJson(MISS_PATH, { items: [] });
+  const feedbackQueue = readJson(FEEDBACK_PATH, { items: [] });
+  const negativeAliasRules = readJson(NEGATIVE_ALIAS_RULES_PATH, { rules: {} });
   const unknownQueue = readJson(UNKNOWN_PATH, { items: [] });
   const learned = readJson(LEARNED_SYNONYMS_PATH, { items: [] });
   const ingredientKnowledge = readJson(INGREDIENT_KNOWLEDGE_PATH, { canonical: {}, synonyms: {}, family_rules: [] });
@@ -111,6 +153,8 @@ function main() {
   const frontendOverrides = readJson(FRONTEND_INGREDIENT_OVERRIDES_PATH, { db: {}, aliases: {}, synonyms: {}, familyRules: [] });
   const promoted = [];
   const unresolvedMisses = [];
+  const promotionReport = [];
+  const reviewQueue = [];
   const promotedUnknowns = [];
   let autoApproved = 0;
 
@@ -118,6 +162,10 @@ function main() {
     ...p,
     name_aliases: [...new Set([...(p.name_aliases || []), ...aliasFromName(p.name_canonical || '')])],
     brand_aliases: [...new Set([...(p.brand_aliases || []), normalizeText(p.brand_canonical || '')])],
+    alias_confidence: (p.alias_confidence && typeof p.alias_confidence === 'object') ? p.alias_confidence : {},
+    alias_sources: Array.isArray(p.alias_sources) ? p.alias_sources : [],
+    last_alias_hit_at: p.last_alias_hit_at || '',
+    promotion_metadata: (p.promotion_metadata && typeof p.promotion_metadata === 'object') ? p.promotion_metadata : {},
     confidence_metadata: {
       ...(p.confidence_metadata || {}),
       freshness: 'daily',
@@ -164,6 +212,89 @@ function main() {
       branded,
       lastSeenAt: missQueue.items.find(x => normalizeText(x.normalizedQuery || x.rawQuery || '') === q)?.lastSeenAt || new Date().toISOString()
     });
+  });
+
+  // Candidate feedback promotion loop: auto-promote only when confidence is strong, route conflicts to review queue.
+  feedbackQueue.items.forEach(item => {
+    const normalizedQuery = normalizeText(item.normalizedQuery || '');
+    if (!normalizedQuery) return;
+    const mappingStats = item.mappingStats || {};
+    const mappings = Object.values(mappingStats)
+      .map(stat => ({
+        productId: stat.productId,
+        count: Number(stat.count || 0),
+        dailyCount: countRecentSelections(stat.dailySelections || {}, 1),
+        analysisSucceeded: Number(stat.analysisSucceeded || 0)
+      }))
+      .filter(x => x.productId);
+    if (!mappings.length) return;
+
+    mappings.sort((a, b) => b.count - a.count);
+    const top = mappings[0];
+    const second = mappings[1] || { count: 0 };
+    const totalSelections = Number(item.totalSelections || mappings.reduce((sum, x) => sum + x.count, 0));
+    const dailySelections = countRecentSelections(item.dailySelections || {}, 1);
+    const dominantShare = totalSelections ? (top.count / totalSelections) : 0;
+    const secondShare = totalSelections ? (second.count / totalSelections) : 0;
+    const topProduct = index.products.find(p => p.product_id === top.productId);
+    const stableProduct = !!(topProduct && topProduct.brand_canonical && topProduct.name_canonical);
+    const confidence = Number((dominantShare * 0.8 + Math.min(0.2, (top.analysisSucceeded / Math.max(1, top.count)) * 0.2)).toFixed(3));
+
+    const autoPromote = (
+      dailySelections >= 3 &&
+      totalSelections >= 20 &&
+      dominantShare >= 0.7 &&
+      secondShare <= 0.2 &&
+      stableProduct
+    );
+
+    if (autoPromote) {
+      const variants = generateAliasVariants(normalizedQuery);
+      ensureCatalogAliasMetadata(topProduct);
+      topProduct.name_aliases = [...new Set([...(topProduct.name_aliases || []), ...variants])];
+      topProduct.alias_sources = [...new Set([...(topProduct.alias_sources || []), 'feedback_auto'])];
+      topProduct.last_alias_hit_at = item.lastSeenAt || new Date().toISOString();
+      variants.forEach(alias => {
+        topProduct.alias_confidence[alias] = Math.max(Number(topProduct.alias_confidence[alias] || 0), confidence);
+        topProduct.promotion_metadata[alias] = {
+          promoted_from_feedback: true,
+          selectedProductId: top.productId,
+          count: top.count,
+          confidence,
+          promotedAt: new Date().toISOString()
+        };
+      });
+      const blocked = mappings.filter(x => x.productId !== top.productId && x.count > 0).map(x => x.productId);
+      if (blocked.length) {
+        negativeAliasRules.rules[normalizedQuery] = [...new Set([...(negativeAliasRules.rules[normalizedQuery] || []), ...blocked])];
+      }
+      promotionReport.push({
+        normalizedQuery,
+        selectedProductId: top.productId,
+        totalSelections,
+        dailySelections,
+        dominantShare: Number(dominantShare.toFixed(3)),
+        secondShare: Number(secondShare.toFixed(3)),
+        confidence,
+        aliasesAdded: variants
+      });
+      return;
+    }
+
+    if (dailySelections >= 3) {
+      reviewQueue.push({
+        normalizedQuery,
+        totalSelections,
+        dailySelections,
+        dominantProductId: top.productId,
+        dominantShare: Number(dominantShare.toFixed(3)),
+        secondShare: Number(secondShare.toFixed(3)),
+        mappings: mappings.slice(0, 5),
+        reason: !stableProduct
+          ? 'no_stable_canonical_match'
+          : (secondShare > 0.2 ? 'high_conflict' : 'insufficient_confidence')
+      });
+    }
   });
 
   // Promote frequently seen unknown ingredients into a review-driven learned synonyms file.
@@ -242,14 +373,45 @@ function main() {
     autoApproved += 1;
   });
 
+  index.products = index.products.map(product => {
+    ensureCatalogAliasMetadata(product);
+    if (product.alias_sources.includes('feedback_auto') && isOlderThanDays(product.last_alias_hit_at, 90)) {
+      const staleAliases = Object.entries(product.promotion_metadata || {})
+        .filter(([, meta]) => meta && meta.promoted_from_feedback)
+        .map(([alias]) => alias);
+      if (staleAliases.length) {
+        const staleSet = new Set(staleAliases);
+        product.name_aliases = (product.name_aliases || []).filter(alias => !staleSet.has(normalizeText(alias)));
+        staleAliases.forEach(alias => {
+          delete product.alias_confidence[alias];
+          delete product.promotion_metadata[alias];
+        });
+      }
+    }
+    return product;
+  });
+
   index.products = dedupeProducts(index.products);
   catalog.products = dedupeProducts(catalog.products);
   catalog.miss_candidates = unresolvedMisses.slice(0, 200);
+  catalog.review_candidates = reviewQueue.slice(0, 200);
   index.last_updated = new Date().toISOString();
   catalog.last_updated = new Date().toISOString();
   writeJson(BRAND_LEXICON_PATH, {
     updated_at: new Date().toISOString(),
     aliases: buildBrandLexicon(index.products)
+  });
+  writeJson(NEGATIVE_ALIAS_RULES_PATH, {
+    updated_at: new Date().toISOString(),
+    rules: negativeAliasRules.rules || {}
+  });
+  writeJson(PROMOTION_REPORT_PATH, {
+    generated_at: new Date().toISOString(),
+    items: promotionReport
+  });
+  writeJson(REVIEW_QUEUE_PATH, {
+    generated_at: new Date().toISOString(),
+    items: reviewQueue
   });
   writeJson(INDEX_PATH, index);
   writeJson(CATALOG_PATH, catalog);
@@ -264,6 +426,8 @@ function main() {
     catalogCount: catalog.products.length,
     promotedMisses: promoted.length,
     unresolvedMisses: unresolvedMisses.length,
+    autoPromotions: promotionReport.length,
+    reviewQueueCount: reviewQueue.length,
     brandLexiconSize: buildBrandLexicon(index.products).length,
     promotedUnknowns: promotedUnknowns.length,
     proposalCount: ingredientProposals.items.length,

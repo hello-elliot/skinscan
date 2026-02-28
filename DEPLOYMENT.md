@@ -38,3 +38,13 @@ In app search:
 In Network tab confirm calls to:
 
 `https://skinscan-3bgp.onrender.com/resolver/products`
+
+## 5) Post-deploy smoke check (required)
+
+Run:
+
+`bash scripts/smoke_resolver_contract.sh https://skinscan-3bgp.onrender.com`
+
+Expected:
+- `ok: true`
+- no contract failures for `decisionReason` / `autoResolved`.

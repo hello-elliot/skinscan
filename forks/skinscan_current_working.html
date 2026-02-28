@@ -758,6 +758,7 @@ let lastAnalysisData = null;      // gap #4: store last result for re-analysis
 let autoReanalyzeTimer = null;
 let latestSuggestRequestId = 0;
 let searchState = 'idle';
+let lastSuggestionMeta = null;
 const productInput = document.getElementById('productInput');
 
 // SearchState: 'idle' | 'searching' | 'results' | 'empty' | 'error'
@@ -1043,6 +1044,7 @@ let searchTimeout = null;
 productInput.addEventListener('input', () => {
   const val = productInput.value.trim();
   selectedProduct = null;
+  lastSuggestionMeta = null;
   clearTimeout(searchTimeout);
   if (val.length >= 3 && !val.includes(',') && val.length < 80)
     searchTimeout = setTimeout(() => triggerSuggest(val), 400);
@@ -1065,6 +1067,7 @@ function hideSuggestions() {
   suggestionsEl.classList.remove('show');
   suggestionsEl.innerHTML = '';
   suggestionsEl._products = [];
+  lastSuggestionMeta = null;
 }
 async function triggerSuggest(query) {
   const requestId = ++latestSuggestRequestId;
@@ -1077,7 +1080,10 @@ async function triggerSuggest(query) {
   }
   if (resolution.state === 'resolved_high') {
     if (resolution.autoResolved === false && resolution.product) {
-      showSuggestions([resolution.product], { confirmMode: true });
+      showSuggestions([resolution.product], {
+        confirmMode: true,
+        meta: { query, normalizedQuery: resolution.normalizedQuery || normalizeQuery(query), selectionContext: 'suggestions' }
+      });
       setSearchState('results', { query });
       trackEvent('product_confirmation_shown', { query, confidence: 'high_guarded', decisionReason: resolution.decisionReason || 'guarded_high' });
       return;
@@ -1086,13 +1092,19 @@ async function triggerSuggest(query) {
     return;
   }
   if (resolution.state === 'resolved_medium') {
-    showSuggestions([resolution.product], { confirmMode: true });
+    showSuggestions([resolution.product], {
+      confirmMode: true,
+      meta: { query, normalizedQuery: resolution.normalizedQuery || normalizeQuery(query), selectionContext: 'suggestions' }
+    });
     setSearchState('results', { query });
     trackEvent('product_confirmation_shown', { query, confidence: 'medium', decisionReason: resolution.decisionReason || '' });
     return;
   }
   if (resolution.state === 'candidate_list' && resolution.candidates?.length) {
-    showSuggestions(resolution.candidates.slice(0, 7), { confirmMode: false });
+    showSuggestions(resolution.candidates.slice(0, 7), {
+      confirmMode: false,
+      meta: { query, normalizedQuery: resolution.normalizedQuery || normalizeQuery(query), selectionContext: 'suggestions' }
+    });
     setSearchState('results', { query });
     return;
   }
@@ -1493,6 +1505,24 @@ async function resolveProduct(query, options = {}) {
   if (backend && backend.state && backend.state !== 'error') return backend;
   return resolveProductLocal(query, options);
 }
+async function sendCandidateSelectionFeedback(payload) {
+  if (!payload?.selectedProductId) return;
+  try {
+    await fetch(resolverUrl('/resolver/feedback/candidate-selection'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: payload.query || '',
+        normalizedQuery: payload.normalizedQuery || '',
+        shownCandidateProductIds: Array.isArray(payload.shownCandidateProductIds) ? payload.shownCandidateProductIds : [],
+        selectedProductId: payload.selectedProductId,
+        selectionContext: payload.selectionContext || 'search',
+        analysisStarted: !!payload.analysisStarted,
+        analysisSucceeded: !!payload.analysisSucceeded
+      })
+    });
+  } catch (_) {}
+}
 async function enrichCandidateIngredients(candidate) {
   const q = [candidate.brand, candidate.name].filter(Boolean).join(' ').trim() || candidate.name;
   if (!q) return candidate;
@@ -1630,6 +1660,12 @@ function showSuggestions(products, options = {}) {
     category: cleanCandidateText(p.category || '', 100)
   }));
   suggestionsEl._products = normalized;
+  lastSuggestionMeta = {
+    query: options.meta?.query || productInput.value.trim(),
+    normalizedQuery: options.meta?.normalizedQuery || normalizeQuery(options.meta?.query || productInput.value.trim()),
+    selectionContext: options.meta?.selectionContext || 'suggestions',
+    shownCandidateProductIds: normalized.map(p => p.productId).filter(Boolean).slice(0, 10)
+  };
   suggestionsEl.innerHTML = normalized.map((p, i) => {
     const badgeText = confirmMode && i === 0 ? 'Confirm this product?' : (p.confidence || 'low').toUpperCase();
     const badgeTone = confirmMode && i === 0 ? 'inci' : (p.confidence === 'high' ? 'obf' : 'inci');
@@ -1648,6 +1684,23 @@ function showSuggestions(products, options = {}) {
 }
 async function pickProduct(i) {
   const p = suggestionsEl._products[i];
+  const feedbackBase = {
+    query: lastSuggestionMeta?.query || productInput.value.trim() || [p.brand, p.name].filter(Boolean).join(' '),
+    normalizedQuery: lastSuggestionMeta?.normalizedQuery || normalizeQuery(lastSuggestionMeta?.query || productInput.value.trim() || [p.brand, p.name].filter(Boolean).join(' ')),
+    shownCandidateProductIds: Array.isArray(lastSuggestionMeta?.shownCandidateProductIds)
+      ? lastSuggestionMeta.shownCandidateProductIds
+      : (suggestionsEl._products || []).map(x => x.productId).filter(Boolean).slice(0, 10),
+    selectedProductId: p.productId || '',
+    selectionContext: lastSuggestionMeta?.selectionContext || 'suggestions'
+  };
+  const sendSelectionFeedback = (analysisStarted, analysisSucceeded) => {
+    sendCandidateSelectionFeedback({
+      ...feedbackBase,
+      analysisStarted: !!analysisStarted,
+      analysisSucceeded: !!analysisSucceeded
+    });
+  };
+
   selectedProduct = {...p};
   productInput.value = p.name + (p.brand ? ' — ' + p.brand : '');
   hideSuggestions();
@@ -1665,14 +1718,17 @@ async function pickProduct(i) {
       selectedProduct.name = result.productName || p.name;
       selectedProduct.brand = result.brand || p.brand;
       selectedProduct.ingredientsStatus = 'available';
+      sendSelectionFeedback(true, true);
       trackEvent('product_confirmation_accepted', { name: selectedProduct.name });
       await runAnalysis(selectedProduct.name, selectedProduct.brand, selectedProduct.ingredientsText, 'resolver', selectedProduct.img || '', selectedProduct.category || '');
     } else {
       const enriched = await enrichCandidateIngredients(selectedProduct);
       if (enriched?.ingredientsText) {
+        sendSelectionFeedback(true, true);
         trackEvent('product_confirmation_accepted', { name: enriched.name || selectedProduct.name });
         await runAnalysis(enriched.name || selectedProduct.name, enriched.brand || selectedProduct.brand || '', enriched.ingredientsText, 'resolver', enriched.img || selectedProduct.img || '');
       } else {
+        sendSelectionFeedback(false, false);
         showProductNeedsIngredients(selectedProduct);
       }
     }
@@ -1680,6 +1736,7 @@ async function pickProduct(i) {
   }
 
   if (p.ingredientsText) {
+    sendSelectionFeedback(true, true);
     trackEvent('product_confirmation_accepted', { name: p.name });
     await runAnalysis(p.name, p.brand || '', p.ingredientsText, 'resolver', p.img || '', p.category || '');
     return;
@@ -1688,10 +1745,12 @@ async function pickProduct(i) {
   setLoading('Fetching product details…', p.name || '');
   const enriched = await enrichCandidateIngredients(p);
   if (enriched?.ingredientsText) {
+    sendSelectionFeedback(true, true);
     trackEvent('product_confirmation_accepted', { name: enriched.name || p.name });
     await runAnalysis(enriched.name || p.name, enriched.brand || p.brand || '', enriched.ingredientsText, 'resolver', enriched.img || p.img || '', enriched.category || p.category || '');
     return;
   }
+  sendSelectionFeedback(false, false);
   showProductNeedsIngredients(p);
 }
 
@@ -1984,21 +2043,30 @@ async function doScan() {
     if (resolution.state === 'candidate_list') {
       document.getElementById('loading').classList.remove('show');
       document.getElementById('inputSection').style.display = '';
-      showSuggestions(resolution.candidates || [], { confirmMode: false });
+      showSuggestions(resolution.candidates || [], {
+        confirmMode: false,
+        meta: { query: inputVal, normalizedQuery: resolution.normalizedQuery || normalizeQuery(inputVal), selectionContext: 'search' }
+      });
       trackEvent('search_state_changed', { state: 'candidate_list', decisionReason: resolution.decisionReason || '' });
       return;
     }
     if (resolution.state === 'resolved_medium') {
       document.getElementById('loading').classList.remove('show');
       document.getElementById('inputSection').style.display = '';
-      showSuggestions([resolution.product], { confirmMode: true });
+      showSuggestions([resolution.product], {
+        confirmMode: true,
+        meta: { query: inputVal, normalizedQuery: resolution.normalizedQuery || normalizeQuery(inputVal), selectionContext: 'search' }
+      });
       trackEvent('product_confirmation_shown', { query: inputVal, confidence: 'medium', decisionReason: resolution.decisionReason || '' });
       return;
     }
     if (resolution.state === 'resolved_high' && resolution.autoResolved === false) {
       document.getElementById('loading').classList.remove('show');
       document.getElementById('inputSection').style.display = '';
-      showSuggestions([resolution.product], { confirmMode: true });
+      showSuggestions([resolution.product], {
+        confirmMode: true,
+        meta: { query: inputVal, normalizedQuery: resolution.normalizedQuery || normalizeQuery(inputVal), selectionContext: 'search' }
+      });
       trackEvent('product_confirmation_shown', { query: inputVal, confidence: 'high_guarded', decisionReason: resolution.decisionReason || 'guarded_high' });
       return;
     }

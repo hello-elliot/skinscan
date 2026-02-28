@@ -24,6 +24,7 @@ Optional env:
 - `AI_PROXY_URL` (default: `https://skinscan-proxy.kelly-f.workers.dev`)
 - `AI_FALLBACK_ENABLED=true|false`
 - `AUTO_RESOLVE_ENABLED=true|false` (if `false`, only strict exact-high matches auto-resolve)
+- `STRICT_BRAND_GATE_ENABLED=true|false` (if `true`, stricter brand-confidence gating before medium/high resolution)
 
 ## Daily Enrichment Job
 
@@ -33,6 +34,10 @@ node backend/daily_enrichment.js
 
 This updates aliases, deduplicates index records, and promotes frequent misses.
 It also refreshes `product_catalog.json` and applies lightweight unknown-ingredient synonym promotion into `ingredient_knowledge.json`.
+It now also consumes `candidate_feedback_queue.json` to:
+- auto-promote high-confidence query->product mappings into aliases
+- produce `promotion_report.json` and `review_queue.json`
+- update `negative_alias_rules.json` for conflict suppression
 
 ## API
 
@@ -108,6 +113,24 @@ Returns:
 }
 ```
 
+### `POST /resolver/feedback/candidate-selection`
+
+Input:
+
+```json
+{
+  "query": "allies of skin molecular silk amino hydrating cleanser",
+  "normalizedQuery": "allies of skin molecular silk amino hydrating cleanser",
+  "shownCandidateProductIds": ["product_a", "product_b"],
+  "selectedProductId": "product_a",
+  "selectionContext": "search",
+  "analysisStarted": true,
+  "analysisSucceeded": true
+}
+```
+
+Stores supervised selection feedback used by daily alias-promotion jobs.
+
 ### `POST /resolver/unknown-ingredients`
 
 Input:
@@ -138,7 +161,23 @@ Actions: `approve`, `reject`, `approve_provisional`.
 
 ### `GET /resolver/coverage-metrics`
 
-Returns index stats, miss queue, and 24h resolver KPI snapshot.
+Returns index stats, miss queue, contract smoke status, and 24h resolver KPI snapshot.
+If contract fields are missing (`decisionReason` / `autoResolved`), KPI output is blocked (`kpi: null`).
+
+### `GET /resolver/smoke-check`
+
+Returns resolver contract smoke-check status for key canary queries.
+
+## Smoke Script
+
+```bash
+bash scripts/smoke_resolver_contract.sh https://skinscan-3bgp.onrender.com
+```
+
+Checks live deploy contract shape:
+- `decisionReason` is present
+- `autoResolved` is boolean
+- `state` exists
 
 ## Data Files
 
@@ -146,6 +185,10 @@ Returns index stats, miss queue, and 24h resolver KPI snapshot.
 - `backend/data/product_catalog.json` searchable catalog with aliases/freshness
 - `backend/data/brand_lexicon.json` daily-generated brand alias lexicon
 - `backend/data/coverage_miss_queue.json` miss-driven queue
+- `backend/data/candidate_feedback_queue.json` UI selection feedback queue
+- `backend/data/negative_alias_rules.json` query/product suppression rules from conflicts
+- `backend/data/promotion_report.json` daily auto-promotion output
+- `backend/data/review_queue.json` daily high-conflict/low-confidence review items
 - `backend/data/resolver_metrics.json` telemetry aggregate events
 - `backend/data/source_cache.json` file-backed source cache (24h TTL)
 - `backend/data/canary_queries.json` canary search queries for regression checks

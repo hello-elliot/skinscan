@@ -1,0 +1,48 @@
+{
+  "items": [
+    {
+      "queryHash": "616c6c696573206f",
+      "normalizedQuery": "allies of skin molecular silk amino hydrating cleanser",
+      "rawQuerySamples": [
+        "allies of skin molecular silk amino hydrating cleanser"
+      ],
+      "firstSeenAt": "2026-02-28T18:21:59.059Z",
+      "lastSeenAt": "2026-02-28T18:21:59.059Z",
+      "totalSelections": 1,
+      "contextCounts": {
+        "search": 1
+      },
+      "shownCandidateProductIds": [
+        "estee_lauder_anr_serum",
+        "dr_althea_345_relief_cream"
+      ],
+      "dailySelections": {
+        "2026-02-28": 1
+      },
+      "mappingStats": {
+        "estee_lauder_anr_serum": {
+          "productId": "estee_lauder_anr_serum",
+          "count": 1,
+          "shownCount": 1,
+          "analysisStarted": 1,
+          "analysisSucceeded": 0,
+          "firstSeenAt": "2026-02-28T18:21:59.059Z",
+          "lastSeenAt": "2026-02-28T18:21:59.059Z",
+          "dailySelections": {
+            "2026-02-28": 1
+          }
+        },
+        "dr_althea_345_relief_cream": {
+          "productId": "dr_althea_345_relief_cream",
+          "count": 0,
+          "shownCount": 1,
+          "analysisStarted": 0,
+          "analysisSucceeded": 0,
+          "firstSeenAt": "2026-02-28T18:21:59.059Z",
+          "lastSeenAt": "2026-02-28T18:21:59.059Z",
+          "dailySelections": {}
+        }
+      }
+    }
+  ]
+}
