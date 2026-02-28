@@ -31,6 +31,7 @@ node backend/daily_enrichment.js
 ```
 
 This updates aliases, deduplicates index records, and promotes frequent misses.
+It also refreshes `product_catalog.json` and applies lightweight unknown-ingredient synonym promotion into `ingredient_knowledge.json`.
 
 ## API
 
@@ -115,10 +116,12 @@ Returns index stats, miss queue, and 24h resolver KPI snapshot.
 ## Data Files
 
 - `backend/data/product_index.json` canonical product index
+- `backend/data/product_catalog.json` searchable catalog with aliases/freshness
 - `backend/data/coverage_miss_queue.json` miss-driven queue
 - `backend/data/resolver_metrics.json` telemetry aggregate events
 - `backend/data/source_cache.json` file-backed source cache (24h TTL)
 - `backend/data/canary_queries.json` canary search queries for regression checks
 - `backend/data/unknown_ingredient_queue.json` backend unknown-ingredient queue
 - `backend/data/ingredient_synonyms_learned.json` nightly review-driven synonym candidates
+- `backend/data/ingredient_knowledge.json` canonical ingredient + synonym + family rules
 - `backend/data/product_source_profiles.json` curated PDP sources for top products

@@ -9,11 +9,13 @@ const PORT = Number(process.env.PORT || process.env.RESOLVER_PORT || 8788);
 
 const DATA_DIR = path.join(__dirname, 'data');
 const INDEX_PATH = path.join(DATA_DIR, 'product_index.json');
+const CATALOG_PATH = path.join(DATA_DIR, 'product_catalog.json');
 const MISS_PATH = path.join(DATA_DIR, 'coverage_miss_queue.json');
 const METRICS_PATH = path.join(DATA_DIR, 'resolver_metrics.json');
 const SOURCE_CACHE_PATH = path.join(DATA_DIR, 'source_cache.json');
 const UNKNOWN_QUEUE_PATH = path.join(DATA_DIR, 'unknown_ingredient_queue.json');
 const SOURCE_PROFILE_PATH = path.join(DATA_DIR, 'product_source_profiles.json');
+const INGREDIENT_KNOWLEDGE_PATH = path.join(DATA_DIR, 'ingredient_knowledge.json');
 
 const SOURCE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SOURCE_TIMEOUT_MS = 3000;
@@ -107,6 +109,33 @@ const QUICK_ENRICH_CATALOG = [
   }
 ];
 
+const DEFAULT_INGREDIENT_KNOWLEDGE = {
+  canonical: {
+    'METHYL GLUCETH-20': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'humectant' },
+    'TRIPEPTIDE-32': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'peptide' },
+    'HYDROLYZED ALGIN': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'humectant' },
+    PANTETHINE: { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'skin conditioning' },
+    'SODIUM RNA': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'skin conditioning' },
+    'OLETH-3 PHOSPHATE': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'emulsifier' },
+    'JOJOBA WAX PEG-120 ESTERS': { acne: 1, irr: 0, dry: 0, al: 0, safe: true, func: 'emollient' },
+    'CETETH-24': { acne: 1, irr: 0, dry: 0, al: 0, safe: true, func: 'emulsifier' },
+    'YELLOW 5': { acne: 0, irr: 1, dry: 0, al: 0, safe: null, func: 'colorant' }
+  },
+  synonyms: {
+    'YEAST EXTRACT/FAEX/EXTRAIT DE LEVURE': 'YEAST EXTRACT',
+    'YELLOW 5 (CI 19140)': 'YELLOW 5',
+    'CI 19140': 'YELLOW 5'
+  },
+  family_rules: [
+    { pattern: '^TRIPEPTIDE-', canonical: 'TRIPEPTIDE-32' },
+    { pattern: '^PEPTIDE-', canonical: 'TRIPEPTIDE-32' },
+    { pattern: 'YEAST|FAEX|LEVURE', canonical: 'YEAST EXTRACT' },
+    { pattern: 'ALGIN', canonical: 'HYDROLYZED ALGIN' },
+    { pattern: '^CETETH-', canonical: 'CETETH-24' },
+    { pattern: '^OLETH-', canonical: 'OLETH-3 PHOSPHATE' }
+  ]
+};
+
 const sourceCache = readJson(SOURCE_CACHE_PATH, { items: {} });
 
 function readJson(filePath, fallback) {
@@ -123,6 +152,52 @@ function writeJson(filePath, value) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function slugifyProductId(brand, name) {
+  const raw = `${brand || ''} ${name || ''}`.toLowerCase();
+  return raw
+    .replace(/&/g, ' and ')
+    .replace(/[^\w\s-]/g, ' ')
+    .replace(/\s+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 96);
+}
+
+function readIngredientKnowledge() {
+  const source = readJson(INGREDIENT_KNOWLEDGE_PATH, DEFAULT_INGREDIENT_KNOWLEDGE);
+  return {
+    canonical: source.canonical || {},
+    synonyms: source.synonyms || {},
+    family_rules: Array.isArray(source.family_rules) ? source.family_rules : []
+  };
+}
+
+function resolveIngredientKnowledge(token, knowledge) {
+  const normalizedToken = String(token || '')
+    .toUpperCase()
+    .replace(/[()[\]{}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalizedToken) return { normalizedToken: '', matchType: 'unknown', canonicalId: '', confidence: 'low' };
+  if (knowledge.canonical[normalizedToken]) {
+    return { normalizedToken, matchType: 'exact', canonicalId: normalizedToken, confidence: 'high' };
+  }
+  const mapped = knowledge.synonyms[normalizedToken];
+  if (mapped && knowledge.canonical[mapped]) {
+    return { normalizedToken, matchType: 'synonym', canonicalId: mapped, confidence: 'medium' };
+  }
+  for (const rule of knowledge.family_rules) {
+    try {
+      if (new RegExp(rule.pattern, 'i').test(normalizedToken) && knowledge.canonical[rule.canonical]) {
+        return { normalizedToken, matchType: 'family', canonicalId: rule.canonical, confidence: 'medium' };
+      }
+    } catch (_) {}
+  }
+  if (/\bEXTRACT\b/i.test(normalizedToken)) {
+    return { normalizedToken, matchType: 'generic_extract', canonicalId: 'PLANT EXTRACT', confidence: 'low' };
+  }
+  return { normalizedToken, matchType: 'unknown', canonicalId: '', confidence: 'low' };
 }
 
 function normalizeText(s) {
@@ -413,6 +488,94 @@ function writeIndex(index) {
   writeJson(INDEX_PATH, index);
 }
 
+function asCatalogProduct(product) {
+  if (!product) return null;
+  return {
+    product_id: product.product_id || slugifyProductId(product.brand_canonical, product.name_canonical),
+    brand_canonical: product.brand_canonical || '',
+    name_canonical: product.name_canonical || '',
+    name_aliases: [...new Set([...(product.name_aliases || []), normalizeText(product.name_canonical || '')].filter(Boolean))],
+    brand_aliases: [...new Set([...(product.brand_aliases || []), normalizeText(product.brand_canonical || '')].filter(Boolean))],
+    line: product.line || '',
+    category: product.category || '',
+    image_url: product.image_url || '',
+    ingredients_status: product.ingredients_status || 'missing',
+    ingredients_text: product.ingredients_text || '',
+    ingredients_source: product.ingredients_source || '',
+    ingredients_last_verified_at: product.ingredients_last_verified_at || '',
+    ingredients_version_hash: product.ingredients_version_hash || '',
+    ingredients_confidence: Number(product.ingredients_confidence || 0),
+    source_priority: Number(product.source_priority || 50),
+    confidence_metadata: {
+      quality: product.confidence_metadata?.quality || 'medium',
+      freshness: product.confidence_metadata?.freshness || 'daily',
+      updated_at: product.confidence_metadata?.updated_at || nowIso(),
+      popularity: Number(product.confidence_metadata?.popularity || 0.3)
+    },
+    source_urls: Array.isArray(product.source_urls) ? [...new Set(product.source_urls)] : []
+  };
+}
+
+function ensureCatalogSeededFromIndex(catalog) {
+  if (!catalog.products.length) {
+    const index = readIndex();
+    catalog.products = index.products.map(asCatalogProduct).filter(Boolean);
+  }
+  return catalog;
+}
+
+function readCatalog() {
+  const fallback = { version: 1, last_updated: nowIso(), products: [] };
+  const catalog = readJson(CATALOG_PATH, fallback);
+  const seeded = ensureCatalogSeededFromIndex({
+    version: catalog.version || 1,
+    last_updated: catalog.last_updated || nowIso(),
+    products: Array.isArray(catalog.products) ? catalog.products : []
+  });
+  if (seeded.products.length && (!Array.isArray(catalog.products) || !catalog.products.length)) {
+    writeCatalog(seeded);
+  }
+  return seeded;
+}
+
+function writeCatalog(catalog) {
+  catalog.last_updated = nowIso();
+  writeJson(CATALOG_PATH, catalog);
+}
+
+function upsertCatalogProducts(products = []) {
+  if (!Array.isArray(products) || !products.length) return 0;
+  const catalog = readCatalog();
+  let changed = 0;
+  for (const raw of products) {
+    const product = asCatalogProduct(raw);
+    if (!product || !product.product_id || !product.name_canonical) continue;
+    const existingIdx = catalog.products.findIndex(p => p.product_id === product.product_id
+      || normalizeText(`${p.brand_canonical} ${p.name_canonical}`) === normalizeText(`${product.brand_canonical} ${product.name_canonical}`));
+    if (existingIdx === -1) {
+      catalog.products.push(product);
+      changed += 1;
+      continue;
+    }
+    const prev = asCatalogProduct(catalog.products[existingIdx]);
+    catalog.products[existingIdx] = {
+      ...prev,
+      ...product,
+      name_aliases: [...new Set([...(prev.name_aliases || []), ...(product.name_aliases || [])])],
+      brand_aliases: [...new Set([...(prev.brand_aliases || []), ...(product.brand_aliases || [])])],
+      source_urls: [...new Set([...(prev.source_urls || []), ...(product.source_urls || [])])]
+    };
+    changed += 1;
+  }
+  if (changed) {
+    writeCatalog(catalog);
+    const index = readIndex();
+    index.products = [...catalog.products];
+    writeIndex(index);
+  }
+  return changed;
+}
+
 function ensureProductSchema(product) {
   return {
     ...product,
@@ -424,29 +587,34 @@ function ensureProductSchema(product) {
 }
 
 function quickEnrich(normalizedQuery) {
-  const index = readIndex();
+  const catalog = readCatalog();
   let changed = false;
   QUICK_ENRICH_CATALOG.forEach(seed => {
     const seedTexts = listProductTexts(seed).map(normalizeText);
     if (!seedTexts.some(t => t && (normalizedQuery.includes(t) || t.includes(normalizedQuery)))) return;
-    if (!index.products.some(p => p.product_id === seed.product_id)) {
-      index.products.push(seed);
+    if (!catalog.products.some(p => p.product_id === seed.product_id)) {
+      catalog.products.push(asCatalogProduct(seed));
       changed = true;
     }
   });
-  if (changed) writeIndex(index);
+  if (changed) {
+    writeCatalog(catalog);
+    const index = readIndex();
+    index.products = [...catalog.products];
+    writeIndex(index);
+  }
   return changed;
 }
 
-function resolveAgainstIndex(query, region, locale) {
+function resolveAgainstCatalog(query, region, locale) {
   const normalizedQuery = normalizeText(query);
   const { corrected, applied } = applyCorrections(normalizedQuery);
   const variants = generateVariants(corrected);
-  const index = readIndex();
+  const catalog = readCatalog();
 
   let ranked = [];
   variants.forEach(v => {
-    const scored = index.products
+    const scored = catalog.products
       .map(p => ({ product: ensureProductSchema(p), score: scoreProduct(v, p) }))
       .filter(s => s.score > 0.24)
       .map(s => toResolvedProduct(s.product, s.score, 'low'));
@@ -468,6 +636,54 @@ function resolveAgainstIndex(query, region, locale) {
     region: region || '',
     locale: locale || ''
   };
+}
+
+async function fetchCandidatesFromConnectors(query) {
+  const out = [];
+  const obf = await fetchProductCandidatesFromOBF(query).catch(() => []);
+  out.push(...obf);
+  if (out.length < 4) {
+    const ai = await fetchProductCandidatesFromAI(query).catch(() => []);
+    out.push(...ai);
+  }
+  const dedup = new Map();
+  out.forEach(item => {
+    if (!item) return;
+    const key = normalizeText(`${item.brand_canonical} ${item.name_canonical}`);
+    if (!key) return;
+    if (!dedup.has(key)) dedup.set(key, item);
+    else {
+      const prev = dedup.get(key);
+      dedup.set(key, {
+        ...prev,
+        ...item,
+        source_urls: [...new Set([...(prev.source_urls || []), ...(item.source_urls || [])])],
+        name_aliases: [...new Set([...(prev.name_aliases || []), ...(item.name_aliases || [])])],
+        brand_aliases: [...new Set([...(prev.brand_aliases || []), ...(item.brand_aliases || [])])]
+      });
+    }
+  });
+  return [...dedup.values()];
+}
+
+async function resolveProductWithFallback(query, region, locale) {
+  let result = resolveAgainstCatalog(query, region, locale);
+  if (result.state === 'resolved_high') return result;
+
+  const topScore = result.product?.score || result.candidates?.[0]?.score || 0;
+  if (result.state === 'not_found' || topScore < 0.72) {
+    const candidates = await fetchCandidatesFromConnectors(result.normalized_query || query);
+    if (candidates.length) {
+      upsertCatalogProducts(candidates);
+      result = resolveAgainstCatalog(query, region, locale);
+    }
+  }
+
+  if (result.state === 'not_found') {
+    quickEnrich(result.normalized_query);
+    result = resolveAgainstCatalog(query, region, locale);
+  }
+  return result;
 }
 
 async function fetchJsonWithTimeout(url, timeoutMs, headers = {}) {
@@ -534,6 +750,136 @@ async function fetchIngredientsFromOBF(query) {
   return payload;
 }
 
+async function fetchProductCandidatesFromOBF(query) {
+  const cacheKey = `obf-candidates:${normalizeText(query)}`;
+  const cached = getSourceCache(cacheKey);
+  if (cached) return cached;
+  const url = `https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=25&fields=product_name,brands,ingredients_text,image_small_url,categories,url`;
+  const data = await fetchJsonWithTimeout(url, SOURCE_TIMEOUT_MS, { 'User-Agent': 'SkinScanResolver/1.0 (support@skinscan.local)' });
+  const products = (data.products || [])
+    .filter(p => p.product_name && p.brands)
+    .map(p => {
+      const ingredientsText = normalizeIngredientText(p.ingredients_text || '');
+      const quality = scoreIngredientCandidate(ingredientsText);
+      const brand = String(p.brands || '').split(',')[0].trim();
+      const name = String(p.product_name || '').trim();
+      return asCatalogProduct({
+        product_id: slugifyProductId(brand, name),
+        brand_canonical: brand,
+        name_canonical: name,
+        name_aliases: [normalizeText(name)],
+        brand_aliases: [normalizeText(brand)],
+        line: '',
+        category: String(p.categories || '').split(',')[0].trim(),
+        image_url: p.image_small_url || '',
+        ingredients_status: quality.valid ? 'available' : 'missing',
+        ingredients_text: quality.valid ? ingredientsText : '',
+        ingredients_source: quality.valid ? 'obf' : '',
+        ingredients_last_verified_at: quality.valid ? nowIso() : '',
+        ingredients_version_hash: quality.valid ? hashText(ingredientsText) : '',
+        ingredients_confidence: quality.valid ? quality.confidence : 0,
+        source_priority: quality.valid ? 82 : 76,
+        confidence_metadata: { quality: quality.valid ? 'high' : 'medium', freshness: 'daily', updated_at: nowIso(), popularity: 0.4 },
+        source_urls: p.url ? [p.url] : []
+      });
+    });
+  setSourceCache(cacheKey, products, 6 * 60 * 60 * 1000);
+  return products;
+}
+
+function parseJsonArrayFromText(text) {
+  const cleaned = String(text || '').replace(/```json|```/gi, '');
+  const match = cleaned.match(/\[[\s\S]*\]/);
+  if (!match) return [];
+  try {
+    const parsed = JSON.parse(match[0]);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function fetchProductCandidatesFromAI(query) {
+  if (!AI_FALLBACK_ENABLED || adapterOpen('ai')) return [];
+  const cacheKey = `ai-candidates:${normalizeText(query)}`;
+  const cached = getSourceCache(cacheKey);
+  if (cached) return cached;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SOURCE_TIMEOUT_MS + 2500);
+  try {
+    const res = await fetch(`${AI_PROXY_URL.replace(/\/+$/, '')}/v1/messages`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'web-search-2025-03-05'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1400,
+        tools: [{
+          type: 'web_search_20250305',
+          name: 'web_search',
+          allowed_domains: [
+            'world.openbeautyfacts.org',
+            'sephora.com',
+            'ulta.com',
+            'boots.com',
+            'douglas.com',
+            'lookfantastic.com',
+            'incidecoder.com'
+          ]
+        }],
+        messages: [{
+          role: 'user',
+          content: `Find up to 8 cosmetic product candidates for query "${query}". Return JSON array only:
+[{"brand":"...","name":"...","category":"...","imageUrl":"...","pdpUrl":"...","ingredientsText":"optional comma list"}]`
+        }]
+      })
+    });
+    if (!res.ok) throw new Error(`http_${res.status}`);
+    const data = await res.json();
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+    const parsed = parseJsonArrayFromText(text);
+    const mapped = parsed
+      .map(row => {
+        const brand = String(row.brand || '').trim();
+        const name = String(row.name || '').trim();
+        if (!brand || !name) return null;
+        const ingredientsText = normalizeIngredientText(String(row.ingredientsText || ''));
+        const quality = scoreIngredientCandidate(ingredientsText);
+        return asCatalogProduct({
+          product_id: slugifyProductId(brand, name),
+          brand_canonical: brand,
+          name_canonical: name,
+          name_aliases: [normalizeText(name)],
+          brand_aliases: [normalizeText(brand)],
+          category: String(row.category || '').trim(),
+          image_url: String(row.imageUrl || '').trim(),
+          ingredients_status: quality.valid ? 'available' : 'missing',
+          ingredients_text: quality.valid ? ingredientsText : '',
+          ingredients_source: quality.valid ? 'ai_fallback' : '',
+          ingredients_last_verified_at: quality.valid ? nowIso() : '',
+          ingredients_version_hash: quality.valid ? hashText(ingredientsText) : '',
+          ingredients_confidence: quality.valid ? quality.confidence : 0,
+          source_priority: quality.valid ? 80 : 70,
+          confidence_metadata: { quality: quality.valid ? 'medium' : 'low', freshness: 'daily', updated_at: nowIso(), popularity: 0.35 },
+          source_urls: row.pdpUrl ? [String(row.pdpUrl).trim()] : []
+        });
+      })
+      .filter(Boolean);
+    setSourceCache(cacheKey, mapped, 6 * 60 * 60 * 1000);
+    markAdapterSuccess('ai');
+    return mapped;
+  } catch (_) {
+    markAdapterFailure('ai');
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function extractJsonLdIngredients(text) {
   const scripts = [...String(text || '').matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
   for (const block of scripts) {
@@ -558,11 +904,26 @@ function extractIngredientBlockFromHtml(text) {
   const jsonLd = extractJsonLdIngredients(text);
   if (jsonLd) return jsonLd;
 
+  const jsonLikePatterns = [
+    /"ingredients"\s*:\s*"([^"]{80,5000})"/i,
+    /"ingredientsText"\s*:\s*"([^"]{80,5000})"/i,
+    /"ingredientList"\s*:\s*"([^"]{80,5000})"/i,
+    /"fullIngredients"\s*:\s*"([^"]{80,5000})"/i
+  ];
+  for (const pattern of jsonLikePatterns) {
+    const m = String(text).match(pattern);
+    if (!m || !m[1]) continue;
+    const candidate = normalizeIngredientText(m[1].replace(/\\u003c[^>]*\\u003e/g, ' ').replace(/\\"/g, '"'));
+    const quality = scoreIngredientCandidate(candidate);
+    if (quality.valid) return { ingredientsText: candidate, confidence: quality.confidence };
+  }
+
   const patterns = [
     /ingredients?\s*[:\-]<\/[^>]+>\s*<[^>]+>([\s\S]{80,3200})<\/[^>]+>/i,
     /ingredients?\s*[:\-]\s*([\s\S]{80,3200})/i,
     /full\s+ingredients?\s*[:\-]\s*([\s\S]{80,3200})/i,
-    /inci\s*[:\-]\s*([\s\S]{80,3200})/i
+    /inci\s*[:\-]\s*([\s\S]{80,3200})/i,
+    /what\s+it\s+is\s+formulated\s+without[\s\S]{1,500}?ingredients?\s*[:\-]\s*([\s\S]{80,3200})/i
   ];
 
   for (const pattern of patterns) {
@@ -580,12 +941,45 @@ function loadSourceProfiles() {
   return readJson(SOURCE_PROFILE_PATH, { products: {} });
 }
 
-async function fetchIngredientsFromProfileUrls(productId, kind) {
+function classifyUrlKind(url) {
+  const host = String(url || '').toLowerCase();
+  if (!host) return '';
+  if (host.includes('sephora.') || host.includes('ulta.') || host.includes('boots.') || host.includes('douglas.') || host.includes('lookfantastic.')) {
+    return 'retailer';
+  }
+  return 'brand';
+}
+
+async function discoverPdpUrls(query, product) {
+  const urls = new Set([...(product.source_urls || [])]);
   const profiles = loadSourceProfiles();
-  const urls = profiles?.products?.[productId]?.[kind] || [];
+  (profiles?.products?.[product.product_id]?.brand || []).forEach(u => urls.add(u));
+  (profiles?.products?.[product.product_id]?.retailer || []).forEach(u => urls.add(u));
+
+  const obfCandidates = await fetchProductCandidatesFromOBF(query).catch(() => []);
+  obfCandidates
+    .filter(c => overlapScore(`${query} ${product.brand_canonical} ${product.name_canonical}`, `${c.brand_canonical} ${c.name_canonical}`) >= 0.58)
+    .forEach(c => (c.source_urls || []).forEach(u => urls.add(u)));
+
+  if (urls.size < 2) {
+    const aiCandidates = await fetchProductCandidatesFromAI(query).catch(() => []);
+    aiCandidates
+      .filter(c => overlapScore(`${query} ${product.brand_canonical} ${product.name_canonical}`, `${c.brand_canonical} ${c.name_canonical}`) >= 0.65)
+      .forEach(c => (c.source_urls || []).forEach(u => urls.add(u)));
+  }
+  return [...urls].filter(Boolean).slice(0, 10);
+}
+
+async function fetchIngredientsFromProfileUrls(productId, kind, explicitUrls = []) {
+  const profiles = loadSourceProfiles();
+  const urls = [
+    ...explicitUrls.filter(url => classifyUrlKind(url) === kind),
+    ...(profiles?.products?.[productId]?.[kind] || [])
+  ];
   if (!Array.isArray(urls) || !urls.length) return null;
 
-  for (const url of urls) {
+  const dedupUrls = [...new Set(urls)];
+  for (const url of dedupUrls) {
     const cacheKey = `${kind}:${normalizeText(productId)}:${hashText(url).slice(0, 8)}`;
     const cached = getSourceCache(cacheKey);
     if (cached) return cached;
@@ -711,12 +1105,26 @@ async function tryAdapter(name, fn, context) {
   }
 }
 
-function buildAdapters(product, query) {
+function buildAdapters(product, query, discoveredUrls = []) {
   const q = query || `${product.brand_canonical} ${product.name_canonical}`;
   return [
+    {
+      name: 'index-cache',
+      exec: async () => {
+        if (!productHasIngredients(product)) return null;
+        return {
+          source: 'index-cache',
+          sourceUrl: '',
+          ingredientsText: product.ingredients_text,
+          confidence: Number(product.ingredients_confidence || 0.9),
+          imageUrl: product.image_url || '',
+          category: product.category || ''
+        };
+      }
+    },
     { name: 'obf', exec: () => fetchIngredientsFromOBF(q) },
-    { name: 'retailer', exec: () => fetchIngredientsFromProfileUrls(product.product_id, 'retailer') },
-    { name: 'brand', exec: () => fetchIngredientsFromProfileUrls(product.product_id, 'brand') },
+    { name: 'retailer', exec: () => fetchIngredientsFromProfileUrls(product.product_id, 'retailer', discoveredUrls) },
+    { name: 'brand', exec: () => fetchIngredientsFromProfileUrls(product.product_id, 'brand', discoveredUrls) },
     { name: 'ai', exec: () => fetchIngredientsFromAIFallback(q) }
   ];
 }
@@ -753,7 +1161,14 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
     }
 
     const context = { deadline: Date.now() + SYNC_ENRICH_BUDGET_MS };
-    const adapters = buildAdapters(product, query);
+    const discoveryQuery = query || `${product.brand_canonical} ${product.name_canonical}`.trim();
+    const discoveredUrls = await discoverPdpUrls(discoveryQuery, product).catch(() => []);
+    if (discoveredUrls.length) {
+      product.source_urls = [...new Set([...(product.source_urls || []), ...discoveredUrls])];
+      writeIndex(index);
+      upsertCatalogProducts([product]);
+    }
+    const adapters = buildAdapters(product, query, discoveredUrls);
     let finalFailureStage = 'no_ingredient_block_found';
 
     for (const adapter of adapters) {
@@ -784,13 +1199,24 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
         updated_at: nowIso()
       };
       writeIndex(index);
+      upsertCatalogProducts([product]);
+
+      const knowledge = readIngredientKnowledge();
+      const tokens = ingredientTokens(normalizedIngredients);
+      const matchTypeCount = { exact: 0, synonym: 0, family: 0, generic_extract: 0, unknown: 0 };
+      tokens.forEach(token => {
+        const resolved = resolveIngredientKnowledge(token, knowledge);
+        if (matchTypeCount[resolved.matchType] !== undefined) matchTypeCount[resolved.matchType] += 1;
+        if (resolved.matchType === 'unknown') upsertUnknownIngredient(token, 'resolver_enriched');
+      });
 
       withJobState(productId, { state: 'available', done: true, lastError: '' });
       pushMetric('ingredient_resolve_succeeded', {
         productId,
         source: attempt.result.source,
         duration_ms: Date.now() - startedAt,
-        mode: options.syncMode ? 'sync' : 'async'
+        mode: options.syncMode ? 'sync' : 'async',
+        matchTypeCount
       });
       return;
     }
@@ -895,11 +1321,7 @@ async function handleResolveProducts(req, res) {
     return;
   }
 
-  let result = resolveAgainstIndex(query, region, locale);
-  if (result.state === 'not_found') {
-    quickEnrich(result.normalized_query);
-    result = resolveAgainstIndex(query, region, locale);
-  }
+  let result = await resolveProductWithFallback(query, region, locale);
 
   if (result.state === 'not_found') {
     const miss = upsertMiss(query, result.normalized_query, 'no_candidates', { region, locale });
@@ -1039,6 +1461,7 @@ function handleCoverageMetrics(_req, res) {
   const miss = readJson(MISS_PATH, { items: [] });
   const metrics = readJson(METRICS_PATH, { events: [] });
   const index = readIndex();
+  const catalog = readCatalog();
   const unknown = readJson(UNKNOWN_QUEUE_PATH, { items: [] });
   const last24h = Date.now() - (24 * 60 * 60 * 1000);
   const recentEvents = metrics.events.filter(e => Date.parse(e.ts) >= last24h);
@@ -1052,6 +1475,7 @@ function handleCoverageMetrics(_req, res) {
   sendJson(res, 200, {
     index: {
       productCount: index.products.length,
+      catalogCount: catalog.products.length,
       lastUpdated: index.last_updated
     },
     queue: {

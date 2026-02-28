@@ -324,6 +324,19 @@ const INGREDIENT_DB = {"WATER":{"acne":0,"irr":0,"dry":0,"al":0,"safe":true,"fun
 
 // ── Normalization alias map ──────────────────────────────────────────────────
 // Maps non-standard / regional / common names -> canonical DB keys
+Object.assign(INGREDIENT_DB, {
+  'METHYL GLUCETH-20': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'humectant' },
+  'TRIPEPTIDE-32': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'peptide' },
+  'YEAST EXTRACT': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'ferment' },
+  'HYDROLYZED ALGIN': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'humectant' },
+  'PANTETHINE': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'skin conditioning' },
+  'SODIUM RNA': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'skin conditioning' },
+  'OLETH-3 PHOSPHATE': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'emulsifier' },
+  'JOJOBA WAX PEG-120 ESTERS': { acne: 1, irr: 0, dry: 0, al: 0, safe: true, func: 'emollient' },
+  'CETETH-24': { acne: 1, irr: 0, dry: 0, al: 0, safe: true, func: 'emulsifier' },
+  'FD&C YELLOW 5': { acne: 0, irr: 1, dry: 0, al: 0, safe: null, func: 'colorant' }
+});
+
 const INCI_ALIASES = {
   // Water variants
   'AQUA': 'WATER',
@@ -465,6 +478,17 @@ const INCI_ALIASES = {
   'SNAIL EXTRACT': 'SNAIL SECRETION FILTRATE',
   'EGF': 'SH-OLIGOPEPTIDE-1',
   'STEM CELL EXTRACT': 'STEM CELL EXTRACT', // in DB
+  'YEAST EXTRACT/FAEX/EXTRAIT DE LEVURE': 'YEAST EXTRACT',
+  'METHYL GLUCETH-20': 'METHYL GLUCETH-20',
+  'TRIPEPTIDE-32': 'TRIPEPTIDE-32',
+  'HYDROLYZED ALGIN': 'HYDROLYZED ALGIN',
+  'PANTETHINE': 'PANTETHINE',
+  'SODIUM RNA': 'SODIUM RNA',
+  'OLETH-3 PHOSPHATE': 'OLETH-3 PHOSPHATE',
+  'JOJOBA WAX PEG-120 ESTERS': 'JOJOBA WAX PEG-120 ESTERS',
+  'CETETH-24': 'CETETH-24',
+  'YELLOW 5 (CI 19140)': 'FD&C YELLOW 5',
+  'CI 19140': 'FD&C YELLOW 5',
 };
 
 // ── CI number -> INCI lookup (for bare CI 77XXX codes) ──
@@ -526,6 +550,9 @@ const INGREDIENT_SYNONYMS = {
   'MAGNESIUM ASCORBYL PHOSPHATE': 'ASCORBIC ACID',
   'TOCOPHERYL ACETATE': 'TOCOPHEROL',
   'HYALURONATE': 'SODIUM HYALURONATE',
+  'YEAST EXTRACT/FAEX/EXTRAIT DE LEVURE': 'YEAST EXTRACT',
+  'YELLOW 5 (CI 19140)': 'FD&C YELLOW 5',
+  'CI 19140': 'FD&C YELLOW 5',
 };
 const INGREDIENT_FAMILY_RULES = [
   { pattern: /^HYALURON|HYALURONATE|HYALURONIC/, canonical: 'HYALURONIC ACID' },

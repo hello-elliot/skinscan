@@ -1,0 +1,119 @@
+{
+  "canonical": {
+    "PLANT EXTRACT": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "extract"
+    },
+    "YEAST EXTRACT": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "ferment"
+    },
+    "METHYL GLUCETH-20": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "humectant"
+    },
+    "TRIPEPTIDE-32": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "peptide"
+    },
+    "HYDROLYZED ALGIN": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "humectant"
+    },
+    "PANTETHINE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning"
+    },
+    "SODIUM RNA": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning"
+    },
+    "OLETH-3 PHOSPHATE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "JOJOBA WAX PEG-120 ESTERS": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient"
+    },
+    "CETETH-24": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "YELLOW 5": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": null,
+      "func": "colorant"
+    }
+  },
+  "synonyms": {
+    "YEAST EXTRACT/FAEX/EXTRAIT DE LEVURE": "YEAST EXTRACT",
+    "YELLOW 5 (CI 19140)": "YELLOW 5",
+    "CI 19140": "YELLOW 5"
+  },
+  "family_rules": [
+    {
+      "pattern": "^TRIPEPTIDE-",
+      "canonical": "TRIPEPTIDE-32"
+    },
+    {
+      "pattern": "YEAST|FAEX|LEVURE",
+      "canonical": "YEAST EXTRACT"
+    },
+    {
+      "pattern": "ALGIN",
+      "canonical": "HYDROLYZED ALGIN"
+    },
+    {
+      "pattern": "^CETETH-",
+      "canonical": "CETETH-24"
+    },
+    {
+      "pattern": "^OLETH-",
+      "canonical": "OLETH-3 PHOSPHATE"
+    }
+  ]
+}

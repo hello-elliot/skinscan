@@ -4,9 +4,11 @@ const path = require('path');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const INDEX_PATH = path.join(DATA_DIR, 'product_index.json');
+const CATALOG_PATH = path.join(DATA_DIR, 'product_catalog.json');
 const MISS_PATH = path.join(DATA_DIR, 'coverage_miss_queue.json');
 const UNKNOWN_PATH = path.join(DATA_DIR, 'unknown_ingredient_queue.json');
 const LEARNED_SYNONYMS_PATH = path.join(DATA_DIR, 'ingredient_synonyms_learned.json');
+const INGREDIENT_KNOWLEDGE_PATH = path.join(DATA_DIR, 'ingredient_knowledge.json');
 
 function readJson(filePath, fallback) {
   try {
@@ -60,13 +62,15 @@ function dedupeProducts(products) {
 
 function main() {
   const index = readJson(INDEX_PATH, { version: 1, last_updated: new Date().toISOString(), products: [] });
+  const catalog = readJson(CATALOG_PATH, { version: 1, last_updated: new Date().toISOString(), products: [] });
   const missQueue = readJson(MISS_PATH, { items: [] });
   const unknownQueue = readJson(UNKNOWN_PATH, { items: [] });
   const learned = readJson(LEARNED_SYNONYMS_PATH, { items: [] });
+  const ingredientKnowledge = readJson(INGREDIENT_KNOWLEDGE_PATH, { canonical: {}, synonyms: {}, family_rules: [] });
   const promoted = [];
   const promotedUnknowns = [];
 
-  index.products = index.products.map(p => ({
+  const normalizedProducts = index.products.map(p => ({
     ...p,
     name_aliases: [...new Set([...(p.name_aliases || []), ...aliasFromName(p.name_canonical || '')])],
     brand_aliases: [...new Set([...(p.brand_aliases || []), normalizeText(p.brand_canonical || '')])],
@@ -76,6 +80,8 @@ function main() {
       updated_at: new Date().toISOString()
     }
   }));
+  index.products = normalizedProducts;
+  catalog.products = dedupeProducts([...(catalog.products || []), ...normalizedProducts]);
 
   missQueue.items.forEach(miss => {
     if ((miss.count || 0) < 3) return;
@@ -113,16 +119,31 @@ function main() {
       lastSeenAt: item.lastSeenAt || new Date().toISOString()
     });
     promotedUnknowns.push(item.normalizedToken);
+
+    const token = String(item.normalizedToken || '').trim();
+    if (!token) return;
+    if (ingredientKnowledge.canonical[token]) return;
+    const mapped = Object.keys(ingredientKnowledge.canonical || {}).find(k => token.includes(k) || k.includes(token));
+    if (mapped) {
+      ingredientKnowledge.synonyms[token] = mapped;
+    } else if (/EXTRACT/.test(token)) {
+      ingredientKnowledge.synonyms[token] = 'PLANT EXTRACT';
+    }
   });
 
   index.products = dedupeProducts(index.products);
+  catalog.products = dedupeProducts(catalog.products);
   index.last_updated = new Date().toISOString();
+  catalog.last_updated = new Date().toISOString();
   writeJson(INDEX_PATH, index);
+  writeJson(CATALOG_PATH, catalog);
   writeJson(LEARNED_SYNONYMS_PATH, learned);
+  writeJson(INGREDIENT_KNOWLEDGE_PATH, ingredientKnowledge);
 
   console.log(JSON.stringify({
     ok: true,
     productCount: index.products.length,
+    catalogCount: catalog.products.length,
     promotedMisses: promoted.length,
     promotedUnknowns: promotedUnknowns.length
   }, null, 2));
