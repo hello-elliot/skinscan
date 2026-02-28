@@ -74,6 +74,41 @@
   .sug-status { display: flex; align-items: center; gap: 8px; padding: 12px 13px; font-size: 12.5px; color: rgba(26,20,16,0.55); }
   .sug-status.error { color: var(--bad); }
   .mini-spinner { width: 14px; height: 14px; border: 2px solid rgba(196,98,45,0.2); border-top-color: var(--terra); border-radius: 50%; animation: spin 0.75s linear infinite; flex-shrink: 0; }
+  .add-product-panel { display: none; background: white; border: 1.5px dashed rgba(26,20,16,0.22); border-radius: 11px; padding: 12px; margin: 8px 0 12px; }
+  .add-product-panel.show { display: block; }
+  .add-product-title { font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+  .add-product-desc { font-size: 12px; color: rgba(26,20,16,0.62); margin-bottom: 8px; line-height: 1.45; }
+  .add-product-input, .add-product-textarea {
+    width: 100%;
+    border: 1.5px solid rgba(26,20,16,0.16);
+    border-radius: 9px;
+    padding: 9px 10px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12.5px;
+    color: var(--dark);
+    background: #fff;
+    margin-bottom: 7px;
+    outline: none;
+  }
+  .add-product-textarea { min-height: 72px; resize: vertical; }
+  .add-product-input:focus, .add-product-textarea:focus { border-color: var(--terra); }
+  .add-product-actions { display: flex; gap: 8px; }
+  .add-product-btn {
+    border: 1.5px solid rgba(196,98,45,0.35);
+    background: rgba(196,98,45,0.1);
+    color: #7A3C1A;
+    border-radius: 9px;
+    padding: 8px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+  }
+  .add-product-btn.alt {
+    background: rgba(26,20,16,0.03);
+    border-color: rgba(26,20,16,0.2);
+    color: rgba(26,20,16,0.8);
+  }
+  .add-product-status { font-size: 11.5px; color: rgba(26,20,16,0.62); margin-top: 6px; line-height: 1.4; }
 
   .hint { font-size: 11.5px; color: rgba(26,20,16,0.35); margin-bottom: 15px; line-height: 1.5; }
 
@@ -293,6 +328,7 @@
     </div>
 
     <div class="suggestions" id="suggestions"></div>
+    <div class="add-product-panel" id="addProductPanel"></div>
     <p class="hint" id="searchHint">Photograph a label · Dictate · or paste ingredients</p>
 
     <button class="analyze-btn" onclick="doScan()">Analyze Ingredients →</button>
@@ -786,6 +822,7 @@ function setSearchState(nextState, options = {}) {
     return;
   }
   if (nextState === 'results') return;
+  hideAddProductCapture();
   suggestionsEl._products = [];
   const statusText = nextState === 'searching'
     ? 'Searching...'
@@ -1040,6 +1077,8 @@ async function analyzePhoto(base64Image) {
 // SUGGESTIONS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const suggestionsEl = document.getElementById('suggestions');
+const addProductPanelEl = document.getElementById('addProductPanel');
+let lastAddProductMeta = null;
 let searchTimeout = null;
 productInput.addEventListener('input', () => {
   const val = productInput.value.trim();
@@ -1068,6 +1107,106 @@ function hideSuggestions() {
   suggestionsEl.innerHTML = '';
   suggestionsEl._products = [];
   lastSuggestionMeta = null;
+  lastAddProductMeta = null;
+  if (addProductPanelEl) {
+    addProductPanelEl.classList.remove('show');
+    addProductPanelEl.innerHTML = '';
+  }
+}
+
+function showAddProductCapture(meta = {}) {
+  if (!addProductPanelEl) return;
+  const query = meta.query || productInput.value.trim();
+  if (!query) return;
+  lastAddProductMeta = {
+    query,
+    normalizedQuery: meta.normalizedQuery || normalizeQuery(query),
+    locale: navigator.language || 'en-US',
+    region: ((navigator.language || 'en-US').split('-')[1] || '').toUpperCase()
+  };
+  addProductPanelEl.innerHTML = `
+    <div class="add-product-title">Can’t find it? Add product</div>
+    <div class="add-product-desc">Paste a product page URL for fast indexing. Optional: paste ingredients now.</div>
+    <input id="addProductUrl" class="add-product-input" placeholder="https://brand.com/product-page or retailer URL">
+    <textarea id="addProductIngredients" class="add-product-textarea" placeholder="Optional: paste ingredient list"></textarea>
+    <div class="add-product-actions">
+      <button class="add-product-btn" onclick="submitAddProduct()">Submit for indexing</button>
+      <button class="add-product-btn alt" onclick="hideAddProductCapture()">Hide</button>
+    </div>
+    <div class="add-product-status" id="addProductStatus"></div>
+  `;
+  addProductPanelEl.classList.add('show');
+}
+
+function hideAddProductCapture() {
+  lastAddProductMeta = null;
+  if (!addProductPanelEl) return;
+  addProductPanelEl.classList.remove('show');
+  addProductPanelEl.innerHTML = '';
+}
+
+async function pollIngestionJob(jobId, query) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= 18000) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    try {
+      const res = await fetch(resolverUrl(`/resolver/ingestion-status/${encodeURIComponent(jobId)}`));
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.state === 'completed') {
+        const statusEl = document.getElementById('addProductStatus');
+        if (statusEl) statusEl.textContent = 'Indexed. Refreshing suggestions...';
+        if (query) triggerSuggest(query);
+        trackEvent('add_product_ingestion_completed', { ingestionJobId: jobId, productId: data.productId || '' });
+        return data;
+      }
+      if (data.state === 'failed') {
+        const statusEl = document.getElementById('addProductStatus');
+        if (statusEl) statusEl.textContent = 'Indexing failed for now. You can still paste ingredients and analyze.';
+        trackEvent('add_product_ingestion_failed', { ingestionJobId: jobId, reason: data.reason || '' });
+        return data;
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+async function submitAddProduct() {
+  if (!lastAddProductMeta) return;
+  const urlEl = document.getElementById('addProductUrl');
+  const ingredientsEl = document.getElementById('addProductIngredients');
+  const statusEl = document.getElementById('addProductStatus');
+  const productUrl = (urlEl?.value || '').trim();
+  const ingredientsText = (ingredientsEl?.value || '').trim();
+  if (!productUrl && !ingredientsText) {
+    if (statusEl) statusEl.textContent = 'Add a product URL or paste ingredients.';
+    return;
+  }
+  if (statusEl) statusEl.textContent = 'Submitting...';
+  try {
+    const res = await fetch(resolverUrl('/resolver/feedback/add-product'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: lastAddProductMeta.query,
+        productUrl,
+        ingredientsText,
+        locale: lastAddProductMeta.locale,
+        region: lastAddProductMeta.region
+      })
+    });
+    const data = res.ok ? await res.json() : {};
+    if (!res.ok || !data.accepted || !data.ingestionJobId) {
+      if (statusEl) statusEl.textContent = 'Could not submit right now. Try again in a moment.';
+      trackEvent('add_product_submission_failed', { query: lastAddProductMeta.query });
+      return;
+    }
+    if (statusEl) statusEl.textContent = 'Submitted. Indexing in background...';
+    trackEvent('add_product_submission_sent', { query: lastAddProductMeta.query, ingestionJobId: data.ingestionJobId });
+    pollIngestionJob(data.ingestionJobId, lastAddProductMeta.query);
+  } catch (_) {
+    if (statusEl) statusEl.textContent = 'Could not submit right now. Try again in a moment.';
+  }
 }
 async function triggerSuggest(query) {
   const requestId = ++latestSuggestRequestId;
@@ -1103,7 +1242,12 @@ async function triggerSuggest(query) {
   if (resolution.state === 'candidate_list' && resolution.candidates?.length) {
     showSuggestions(resolution.candidates.slice(0, 7), {
       confirmMode: false,
-      meta: { query, normalizedQuery: resolution.normalizedQuery || normalizeQuery(query), selectionContext: 'suggestions' }
+      meta: {
+        query,
+        normalizedQuery: resolution.normalizedQuery || normalizeQuery(query),
+        selectionContext: 'suggestions',
+        decisionReason: resolution.decisionReason || ''
+      }
     });
     setSearchState('results', { query });
     return;
@@ -1681,6 +1825,11 @@ function showSuggestions(products, options = {}) {
       </div>`;
   }).join('');
   suggestionsEl.classList.add('show');
+  if (options.meta?.decisionReason === 'unknown_brand') {
+    showAddProductCapture(options.meta || {});
+  } else {
+    hideAddProductCapture();
+  }
 }
 async function pickProduct(i) {
   const p = suggestionsEl._products[i];
@@ -2045,7 +2194,12 @@ async function doScan() {
       document.getElementById('inputSection').style.display = '';
       showSuggestions(resolution.candidates || [], {
         confirmMode: false,
-        meta: { query: inputVal, normalizedQuery: resolution.normalizedQuery || normalizeQuery(inputVal), selectionContext: 'search' }
+        meta: {
+          query: inputVal,
+          normalizedQuery: resolution.normalizedQuery || normalizeQuery(inputVal),
+          selectionContext: 'search',
+          decisionReason: resolution.decisionReason || ''
+        }
       });
       trackEvent('search_state_changed', { state: 'candidate_list', decisionReason: resolution.decisionReason || '' });
       return;

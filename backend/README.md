@@ -25,6 +25,7 @@ Optional env:
 - `AI_FALLBACK_ENABLED=true|false`
 - `AUTO_RESOLVE_ENABLED=true|false` (if `false`, only strict exact-high matches auto-resolve)
 - `STRICT_BRAND_GATE_ENABLED=true|false` (if `true`, stricter brand-confidence gating before medium/high resolution)
+- `INGESTION_POLL_INTERVAL_MS` (default `30000`; background cadence for queued add-product ingestion jobs)
 
 ## Daily Enrichment Job
 
@@ -38,6 +39,8 @@ It now also consumes `candidate_feedback_queue.json` to:
 - auto-promote high-confidence query->product mappings into aliases
 - produce `promotion_report.json` and `review_queue.json`
 - update `negative_alias_rules.json` for conflict suppression
+- seed ingestion jobs from frequent misses/feedback into `add_product_queue.json`
+- compact append-only queue/job files and append promotion snapshots to `promotion_report_history.json`
 
 ## API
 
@@ -131,6 +134,42 @@ Input:
 
 Stores supervised selection feedback used by daily alias-promotion jobs.
 
+### `POST /resolver/feedback/add-product`
+
+Input:
+
+```json
+{
+  "query": "allies of skin molecular silk amino hydrating cleanser",
+  "productUrl": "https://...",
+  "ingredientsText": "optional comma-separated INCI list",
+  "locale": "en-US",
+  "region": "US"
+}
+```
+
+Output:
+
+```json
+{ "accepted": true, "ingestionJobId": "ingest_xxx" }
+```
+
+Creates an async ingestion job that upserts a normalized catalog record and triggers ingredient retrieval when needed.
+
+### `GET /resolver/ingestion-status/:jobId`
+
+Returns:
+
+```json
+{
+  "jobId": "ingest_xxx",
+  "state": "queued|processing|completed|failed",
+  "productId": "optional_product_id",
+  "reason": "optional_failure_reason",
+  "updatedAt": "2026-02-28T20:00:00.000Z"
+}
+```
+
 ### `POST /resolver/unknown-ingredients`
 
 Input:
@@ -188,7 +227,10 @@ Checks live deploy contract shape:
 - `backend/data/candidate_feedback_queue.json` UI selection feedback queue
 - `backend/data/negative_alias_rules.json` query/product suppression rules from conflicts
 - `backend/data/promotion_report.json` daily auto-promotion output
+- `backend/data/promotion_report_history.json` daily promotion audit history
 - `backend/data/review_queue.json` daily high-conflict/low-confidence review items
+- `backend/data/add_product_queue.json` append-only add-product ingestion queue
+- `backend/data/ingestion_jobs.json` async ingestion status records
 - `backend/data/resolver_metrics.json` telemetry aggregate events
 - `backend/data/source_cache.json` file-backed source cache (24h TTL)
 - `backend/data/canary_queries.json` canary search queries for regression checks

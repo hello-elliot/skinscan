@@ -18,6 +18,8 @@ services:
         value: true
       - key: STRICT_BRAND_GATE_ENABLED
         value: true
+      - key: INGESTION_POLL_INTERVAL_MS
+        value: 30000
   - type: web
     name: skinscan-frontend
     runtime: static

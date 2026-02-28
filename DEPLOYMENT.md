@@ -39,6 +39,11 @@ In Network tab confirm calls to:
 
 `https://skinscan-3bgp.onrender.com/resolver/products`
 
+For unknown-brand queries, also confirm:
+
+- `POST /resolver/feedback/add-product`
+- `GET /resolver/ingestion-status/:jobId`
+
 ## 5) Post-deploy smoke check (required)
 
 Run:

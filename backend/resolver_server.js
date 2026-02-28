@@ -17,6 +17,8 @@ const SOURCE_CACHE_PATH = path.join(DATA_DIR, 'source_cache.json');
 const UNKNOWN_QUEUE_PATH = path.join(DATA_DIR, 'unknown_ingredient_queue.json');
 const CANDIDATE_FEEDBACK_PATH = path.join(DATA_DIR, 'candidate_feedback_queue.json');
 const NEGATIVE_ALIAS_RULES_PATH = path.join(DATA_DIR, 'negative_alias_rules.json');
+const ADD_PRODUCT_QUEUE_PATH = path.join(DATA_DIR, 'add_product_queue.json');
+const INGESTION_JOBS_PATH = path.join(DATA_DIR, 'ingestion_jobs.json');
 const SOURCE_PROFILE_PATH = path.join(DATA_DIR, 'product_source_profiles.json');
 const INGREDIENT_KNOWLEDGE_PATH = path.join(DATA_DIR, 'ingredient_knowledge.json');
 const INGREDIENT_PROPOSALS_PATH = path.join(DATA_DIR, 'ingredient_proposals.json');
@@ -32,6 +34,7 @@ const AI_PROXY_URL = process.env.AI_PROXY_URL || 'https://skinscan-proxy.kelly-f
 const AI_FALLBACK_ENABLED = String(process.env.AI_FALLBACK_ENABLED || 'true').toLowerCase() !== 'false';
 const AUTO_RESOLVE_ENABLED = String(process.env.AUTO_RESOLVE_ENABLED || 'true').toLowerCase() !== 'false';
 const STRICT_BRAND_GATE_ENABLED = String(process.env.STRICT_BRAND_GATE_ENABLED || 'true').toLowerCase() !== 'false';
+const INGESTION_POLL_INTERVAL_MS = Number(process.env.INGESTION_POLL_INTERVAL_MS || 30000);
 
 const GENERIC_PRODUCT_TOKENS = new Set([
   'serum', 'cream', 'cleanser', 'toner', 'essence', 'mask', 'moisturizer', 'moisturising', 'moisturizing',
@@ -47,6 +50,7 @@ const sourceCircuit = {
   brand: { failures: 0, openUntil: 0 },
   ai: { failures: 0, openUntil: 0 }
 };
+let ingestionWorkerRunning = false;
 
 const KNOWN_CORRECTIONS = {
   'esta louder': 'estee lauder',
@@ -178,6 +182,28 @@ function readNegativeAliasRules() {
   return payload && typeof payload.rules === 'object' && payload.rules ? payload.rules : {};
 }
 
+function readAddProductQueue() {
+  const queue = readJson(ADD_PRODUCT_QUEUE_PATH, { items: [] });
+  return { items: Array.isArray(queue.items) ? queue.items : [] };
+}
+
+function writeAddProductQueue(queue) {
+  writeJson(ADD_PRODUCT_QUEUE_PATH, {
+    items: Array.isArray(queue.items) ? queue.items : []
+  });
+}
+
+function readIngestionJobs() {
+  const jobs = readJson(INGESTION_JOBS_PATH, { items: [] });
+  return { items: Array.isArray(jobs.items) ? jobs.items : [] };
+}
+
+function writeIngestionJobs(jobs) {
+  writeJson(INGESTION_JOBS_PATH, {
+    items: Array.isArray(jobs.items) ? jobs.items : []
+  });
+}
+
 function utcDay(iso = nowIso()) {
   return String(iso).slice(0, 10);
 }
@@ -293,6 +319,31 @@ function normalizeText(s) {
 
 function hashText(text) {
   return crypto.createHash('sha1').update(String(text || '')).digest('hex');
+}
+
+function createJobId(prefix = 'job') {
+  const ts = Date.now().toString(36);
+  const rnd = crypto.randomBytes(4).toString('hex');
+  return `${prefix}_${ts}_${rnd}`;
+}
+
+function sanitizeUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return '';
+    return parsed.toString();
+  } catch (_) {
+    return '';
+  }
+}
+
+function looksGenericProductName(name) {
+  const tokens = tokenize(name);
+  if (!tokens.length) return true;
+  const meaningful = tokens.filter(t => !GENERIC_PRODUCT_TOKENS.has(t) && t.length > 2);
+  return meaningful.length === 0;
 }
 
 function pruneSourceCache() {
@@ -1409,6 +1460,296 @@ function extractIngredientBlockFromHtml(text) {
   return null;
 }
 
+function decodeHtmlEntities(text) {
+  return String(text || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, ' ');
+}
+
+function firstString(value) {
+  if (Array.isArray(value)) {
+    const found = value.find(v => typeof v === 'string' && v.trim());
+    return found ? found.trim() : '';
+  }
+  if (typeof value === 'string') return value.trim();
+  return '';
+}
+
+function productNodeFromJsonLd(parsed) {
+  const nodes = [];
+  if (Array.isArray(parsed)) nodes.push(...parsed);
+  else if (parsed && typeof parsed === 'object') nodes.push(parsed);
+  const expanded = [];
+  nodes.forEach(node => {
+    if (!node || typeof node !== 'object') return;
+    expanded.push(node);
+    if (Array.isArray(node['@graph'])) expanded.push(...node['@graph']);
+  });
+  return expanded.find(node => {
+    const type = Array.isArray(node?.['@type']) ? node['@type'].join(',').toLowerCase() : String(node?.['@type'] || '').toLowerCase();
+    return type.includes('product');
+  }) || null;
+}
+
+function parseProductCandidateFromHtml(text, url = '', fallbackQuery = '') {
+  const scripts = [...String(text || '').matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
+  let parsedProduct = null;
+  for (const block of scripts) {
+    try {
+      const parsed = JSON.parse(block);
+      const productNode = productNodeFromJsonLd(parsed);
+      if (!productNode) continue;
+      const brand = firstString(productNode.brand?.name || productNode.brand);
+      const name = firstString(productNode.name);
+      if (!brand || !name) continue;
+      parsedProduct = {
+        brand,
+        name,
+        category: firstString(productNode.category),
+        imageUrl: firstString(productNode.image),
+        ingredientsText: normalizeIngredientText(firstString(productNode.ingredients || productNode.activeIngredients))
+      };
+      break;
+    } catch (_) {}
+  }
+
+  if (!parsedProduct) {
+    const titleMatch = String(text || '').match(/<title[^>]*>([\s\S]{1,260})<\/title>/i);
+    const title = decodeHtmlEntities(titleMatch?.[1] || '').replace(/\s+/g, ' ').trim();
+    if (title) {
+      const segments = title.split(/[\-|\u2013|\u2014|·]/).map(s => s.trim()).filter(Boolean);
+      const best = segments.length > 1 ? segments.slice(0, 2) : segments;
+      const nameGuess = best[0] || '';
+      const brandGuess = best[1] || '';
+      parsedProduct = {
+        brand: brandGuess || '',
+        name: nameGuess || '',
+        category: '',
+        imageUrl: '',
+        ingredientsText: ''
+      };
+    }
+  }
+
+  if (!parsedProduct) return null;
+  const name = cleanDisplayText(parsedProduct.name, 180);
+  const brand = cleanDisplayText(parsedProduct.brand, 80);
+  if (!name || !brand) return null;
+  if (looksGenericProductName(name)) return null;
+  const ingredientQuality = scoreIngredientCandidate(parsedProduct.ingredientsText || '');
+  return asCatalogProduct({
+    product_id: slugifyProductId(brand, name),
+    brand_canonical: brand,
+    name_canonical: name,
+    name_aliases: [normalizeText(name), normalizeText(fallbackQuery)],
+    brand_aliases: [normalizeText(brand)],
+    line: '',
+    category: cleanDisplayText(parsedProduct.category || '', 100),
+    image_url: parsedProduct.imageUrl || '',
+    ingredients_status: ingredientQuality.valid ? 'available' : 'missing',
+    ingredients_text: ingredientQuality.valid ? normalizeIngredientText(parsedProduct.ingredientsText || '') : '',
+    ingredients_source: ingredientQuality.valid ? 'user_submitted_url' : '',
+    ingredients_last_verified_at: ingredientQuality.valid ? nowIso() : '',
+    ingredients_version_hash: ingredientQuality.valid ? hashText(parsedProduct.ingredientsText || '') : '',
+    ingredients_confidence: ingredientQuality.valid ? ingredientQuality.confidence : 0,
+    source_priority: 86,
+    confidence_metadata: { quality: ingredientQuality.valid ? 'high' : 'medium', freshness: 'daily', updated_at: nowIso(), popularity: 0.35 },
+    source_urls: url ? [url] : []
+  });
+}
+
+function validateIngestionCandidate(candidate, query = '') {
+  if (!candidate) return { ok: false, reason: 'candidate_missing' };
+  if (!String(candidate.brand_canonical || '').trim()) return { ok: false, reason: 'missing_brand' };
+  if (!String(candidate.name_canonical || '').trim()) return { ok: false, reason: 'missing_name' };
+  if (looksGenericProductName(candidate.name_canonical)) return { ok: false, reason: 'generic_name' };
+  if (query) {
+    const similarity = overlapScore(query, `${candidate.brand_canonical} ${candidate.name_canonical}`);
+    if (similarity < 0.28) return { ok: false, reason: 'weak_similarity' };
+  }
+  return { ok: true };
+}
+
+function updateIngestionJob(jobId, patch) {
+  const jobs = readIngestionJobs();
+  const job = jobs.items.find(x => x.jobId === jobId);
+  if (!job) return null;
+  Object.assign(job, patch || {}, { updatedAt: nowIso() });
+  writeIngestionJobs(jobs);
+  return job;
+}
+
+function queueSubmission(payload) {
+  const now = nowIso();
+  const jobId = createJobId('ingest');
+  const queue = readAddProductQueue();
+  const jobs = readIngestionJobs();
+  queue.items.push({
+    jobId,
+    state: 'queued',
+    createdAt: now,
+    updatedAt: now,
+    processedAt: '',
+    source: payload.source || 'user_add_product',
+    payload: {
+      query: String(payload.query || '').trim(),
+      productUrl: sanitizeUrl(payload.productUrl || ''),
+      barcode: String(payload.barcode || '').trim(),
+      imageUrl: sanitizeUrl(payload.imageUrl || ''),
+      ingredientsText: String(payload.ingredientsText || '').trim(),
+      locale: String(payload.locale || '').trim(),
+      region: String(payload.region || '').trim()
+    }
+  });
+  jobs.items.push({
+    jobId,
+    state: 'queued',
+    createdAt: now,
+    updatedAt: now,
+    productId: '',
+    reason: '',
+    source: payload.source || 'user_add_product'
+  });
+  writeAddProductQueue(queue);
+  writeIngestionJobs(jobs);
+  return jobId;
+}
+
+async function candidateFromSubmission(submission) {
+  const query = String(submission.query || '').trim();
+  const productUrl = sanitizeUrl(submission.productUrl || '');
+  const ingredientsText = normalizeIngredientText(submission.ingredientsText || '');
+
+  if (productUrl) {
+    const html = await fetchTextWithTimeout(productUrl, SOURCE_TIMEOUT_MS + 3500);
+    const parsed = parseProductCandidateFromHtml(html, productUrl, query);
+    if (parsed) {
+      if (ingredientsText) {
+        const quality = scoreIngredientCandidate(ingredientsText);
+        if (quality.valid) {
+          parsed.ingredients_text = ingredientsText;
+          parsed.ingredients_status = 'available';
+          parsed.ingredients_source = 'user_submitted_manual';
+          parsed.ingredients_last_verified_at = nowIso();
+          parsed.ingredients_version_hash = hashText(ingredientsText);
+          parsed.ingredients_confidence = Math.max(parsed.ingredients_confidence || 0, quality.confidence);
+        }
+      }
+      return { candidate: parsed, source: 'url' };
+    }
+  }
+
+  if (query) {
+    const resolved = await resolveProductWithFallback(query, submission.region || '', submission.locale || '');
+    const rankedCandidate = resolved.product || (Array.isArray(resolved.candidates) ? resolved.candidates[0] : null);
+    const rankingSafe = rankedCandidate && (
+      resolved.state !== 'candidate_list'
+      || (Number(rankedCandidate.brandSimilarity || 0) >= 0.55 && Number(rankedCandidate.nameSimilarity || 0) >= 0.62)
+    );
+    if (rankingSafe && rankedCandidate) {
+      const existing = asCatalogProduct({
+        product_id: rankedCandidate.productId || slugifyProductId(rankedCandidate.brand, rankedCandidate.name),
+        brand_canonical: rankedCandidate.brand || '',
+        name_canonical: rankedCandidate.name || '',
+        category: rankedCandidate.category || '',
+        image_url: rankedCandidate.imageUrl || '',
+        ingredients_status: rankedCandidate.ingredientsStatus === 'available' ? 'available' : 'missing',
+        ingredients_text: rankedCandidate.ingredientsText || '',
+        ingredients_source: rankedCandidate.ingredientsStatus === 'available' ? 'resolver_feedback' : '',
+        ingredients_last_verified_at: rankedCandidate.ingredientsStatus === 'available' ? nowIso() : '',
+        ingredients_version_hash: rankedCandidate.ingredientsText ? hashText(rankedCandidate.ingredientsText) : '',
+        ingredients_confidence: rankedCandidate.ingredientsStatus === 'available' ? 0.85 : 0,
+        source_priority: 84,
+        confidence_metadata: { quality: 'medium', freshness: 'daily', updated_at: nowIso(), popularity: 0.3 }
+      });
+      if (ingredientsText) {
+        const quality = scoreIngredientCandidate(ingredientsText);
+        if (quality.valid) {
+          existing.ingredients_status = 'available';
+          existing.ingredients_text = ingredientsText;
+          existing.ingredients_source = 'user_submitted_manual';
+          existing.ingredients_last_verified_at = nowIso();
+          existing.ingredients_version_hash = hashText(ingredientsText);
+          existing.ingredients_confidence = quality.confidence;
+        }
+      }
+      return { candidate: existing, source: 'resolver' };
+    }
+  }
+
+  return { candidate: null, source: 'none' };
+}
+
+async function processQueuedIngestionJobs() {
+  if (ingestionWorkerRunning) return;
+  ingestionWorkerRunning = true;
+  try {
+    for (let i = 0; i < 3; i++) {
+      const queue = readAddProductQueue();
+      const next = queue.items.find(item => item && item.state === 'queued' && !item.processedAt);
+      if (!next) break;
+
+      next.state = 'processing';
+      next.updatedAt = nowIso();
+      writeAddProductQueue(queue);
+      updateIngestionJob(next.jobId, { state: 'processing' });
+
+      try {
+        const outcome = await candidateFromSubmission(next.payload || {});
+        const candidate = outcome.candidate;
+        const validation = validateIngestionCandidate(candidate, normalizeText(next.payload?.query || ''));
+        if (!validation.ok) {
+          next.state = 'failed';
+          next.reason = validation.reason;
+          next.processedAt = nowIso();
+          next.updatedAt = nowIso();
+          writeAddProductQueue(queue);
+          updateIngestionJob(next.jobId, { state: 'failed', reason: validation.reason });
+          continue;
+        }
+
+        upsertCatalogProducts([candidate]);
+        if (candidate.ingredients_status !== 'available') {
+          scheduleIngredientResolution(
+            candidate.product_id,
+            (next.payload?.query || `${candidate.brand_canonical} ${candidate.name_canonical}`).trim(),
+            next.payload?.locale || '',
+            next.payload?.region || '',
+            { syncMode: false, forceRetry: false }
+          ).catch(() => {});
+        }
+
+        next.state = 'completed';
+        next.productId = candidate.product_id;
+        next.reason = '';
+        next.processedAt = nowIso();
+        next.updatedAt = nowIso();
+        writeAddProductQueue(queue);
+        updateIngestionJob(next.jobId, { state: 'completed', productId: candidate.product_id, reason: '' });
+        pushMetric('add_product_ingestion_completed', {
+          jobId: next.jobId,
+          productId: candidate.product_id,
+          source: outcome.source
+        });
+      } catch (err) {
+        const reason = String(err?.message || 'ingestion_failed').slice(0, 120);
+        next.state = 'failed';
+        next.reason = reason;
+        next.processedAt = nowIso();
+        next.updatedAt = nowIso();
+        writeAddProductQueue(queue);
+        updateIngestionJob(next.jobId, { state: 'failed', reason });
+        pushMetric('add_product_ingestion_failed', { jobId: next.jobId, reason });
+      }
+    }
+  } finally {
+    ingestionWorkerRunning = false;
+  }
+}
+
 function loadSourceProfiles() {
   return readJson(SOURCE_PROFILE_PATH, { products: {} });
 }
@@ -2212,6 +2553,58 @@ async function handleCandidateSelectionFeedback(req, res) {
   sendJson(res, 200, { ok: true, ...feedback });
 }
 
+async function handleAddProductFeedback(req, res) {
+  const body = await readBody(req);
+  const query = String(body.query || '').trim();
+  const productUrl = sanitizeUrl(body.productUrl || '');
+  const barcode = String(body.barcode || '').trim();
+  const ingredientsText = String(body.ingredientsText || '').trim();
+  const imageUrl = sanitizeUrl(body.imageUrl || body.imageRef || '');
+  const locale = String(body.locale || '').trim();
+  const region = String(body.region || '').trim();
+
+  if (!query && !productUrl && !barcode) {
+    sendJson(res, 400, { error: 'query_or_productUrl_or_barcode_required' });
+    return;
+  }
+
+  const ingestionJobId = queueSubmission({
+    source: 'user_add_product',
+    query: query || barcode,
+    productUrl,
+    barcode,
+    imageUrl,
+    ingredientsText,
+    locale,
+    region
+  });
+  pushMetric('add_product_feedback_received', {
+    ingestionJobId,
+    hasProductUrl: !!productUrl,
+    hasBarcode: !!barcode,
+    hasIngredientsText: !!ingredientsText
+  });
+  processQueuedIngestionJobs().catch(() => {});
+  sendJson(res, 202, { accepted: true, ingestionJobId });
+}
+
+function handleIngestionStatus(_req, res, jobId) {
+  const jobs = readIngestionJobs();
+  const job = jobs.items.find(x => x.jobId === jobId);
+  if (!job) {
+    sendJson(res, 404, { error: 'ingestion_job_not_found' });
+    return;
+  }
+  sendJson(res, 200, {
+    jobId,
+    state: job.state || 'queued',
+    productId: job.productId || '',
+    reason: job.reason || '',
+    updatedAt: job.updatedAt || job.createdAt || '',
+    source: job.source || ''
+  });
+}
+
 async function handleUnknownIngredients(req, res) {
   const body = await readBody(req);
   const items = Array.isArray(body.items) ? body.items : [];
@@ -2330,6 +2723,8 @@ function handleCoverageMetrics(_req, res) {
   const miss = readJson(MISS_PATH, { items: [] });
   const metrics = readJson(METRICS_PATH, { events: [] });
   const feedbackQueue = readCandidateFeedbackQueue();
+  const addProductQueue = readAddProductQueue();
+  const ingestionJobs = readIngestionJobs();
   const index = readIndex();
   const catalog = readCatalog();
   const unknown = readJson(UNKNOWN_QUEUE_PATH, { items: [] });
@@ -2348,11 +2743,13 @@ function handleCoverageMetrics(_req, res) {
   const autoResolvedEvents = confidenceEvents.filter(e => e.payload?.autoResolved);
   const autoResolvedWrong = autoResolvedEvents.filter(e => e.payload?.brandMatched === false).length;
   const candidateListCount = confidenceEvents.filter(e => e.payload?.state === 'candidate_list').length;
+  const unknownBrandCount = confidenceEvents.filter(e => e.payload?.decisionReason === 'unknown_brand').length;
   const noMatchCount = recentEvents.filter(e => e.name === 'resolver_not_found').length;
   const foundRate = (resolved + notFound) ? resolved / (resolved + notFound) : 1;
   const top1BrandMatchRate = brandComparable.length ? brandMatchedCount / brandComparable.length : 1;
   const wrongAutoSelectionRate = autoResolvedEvents.length ? autoResolvedWrong / autoResolvedEvents.length : 0;
   const candidateListRate = confidenceEvents.length ? candidateListCount / confidenceEvents.length : 0;
+  const unknownBrandRate = confidenceEvents.length ? unknownBrandCount / confidenceEvents.length : 0;
   const notFoundRate = (resolved + noMatchCount) ? noMatchCount / (resolved + noMatchCount) : 0;
   const feedbackRecent = feedbackQueue.items.filter(x => Date.parse(x.lastSeenAt || 0) >= last24h);
   const confirmToAnalysisRate = (() => {
@@ -2382,7 +2779,12 @@ function handleCoverageMetrics(_req, res) {
       candidateFeedbackRecent24h: feedbackRecent.length,
       proposalCount: proposals.items.length,
       proposalPending: proposals.items.filter(x => x.state === 'proposed').length,
-      proposalApproved: proposals.items.filter(x => x.state === 'approved_auto' || x.state === 'approved_manual').length
+      proposalApproved: proposals.items.filter(x => x.state === 'approved_auto' || x.state === 'approved_manual').length,
+      addProductQueueCount: addProductQueue.items.length,
+      addProductPendingCount: addProductQueue.items.filter(x => x.state === 'queued' || x.state === 'processing').length,
+      ingestionJobsCount: ingestionJobs.items.length,
+      ingestionCompletedCount: ingestionJobs.items.filter(x => x.state === 'completed').length,
+      ingestionFailedCount: ingestionJobs.items.filter(x => x.state === 'failed').length
     },
     contract: contractCheck,
     kpi: contractCheck.ok ? {
@@ -2392,6 +2794,7 @@ function handleCoverageMetrics(_req, res) {
       top1BrandMatchRate24h: Number(top1BrandMatchRate.toFixed(4)),
       wrongAutoSelectionRate24h: Number(wrongAutoSelectionRate.toFixed(4)),
       candidateListRate24h: Number(candidateListRate.toFixed(4)),
+      unknownBrandRate24h: Number(unknownBrandRate.toFixed(4)),
       notFoundRate24h: Number(notFoundRate.toFixed(4)),
       confirmToAnalysisRate24h: Number(confirmToAnalysisRate.toFixed(4)),
       ingredientResolveStarted24h: enrichStarted,
@@ -2428,6 +2831,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && url.pathname === '/resolver/feedback/add-product') {
+      await handleAddProductFeedback(req, res);
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/resolver/unknown-ingredients') {
       await handleUnknownIngredients(req, res);
       return;
@@ -2446,6 +2854,12 @@ const server = http.createServer(async (req, res) => {
     const statusMatch = url.pathname.match(/^\/resolver\/products\/([^/]+)\/ingredients-status$/);
     if (req.method === 'GET' && statusMatch) {
       await handleIngredientsStatus(req, res, decodeURIComponent(statusMatch[1]));
+      return;
+    }
+
+    const ingestionStatusMatch = url.pathname.match(/^\/resolver\/ingestion-status\/([^/]+)$/);
+    if (req.method === 'GET' && ingestionStatusMatch) {
+      handleIngestionStatus(req, res, decodeURIComponent(ingestionStatusMatch[1]));
       return;
     }
 
@@ -2479,6 +2893,8 @@ const server = http.createServer(async (req, res) => {
           '/resolver/coverage-metrics',
           '/resolver/smoke-check',
           '/resolver/feedback/candidate-selection',
+          '/resolver/feedback/add-product',
+          '/resolver/ingestion-status/:jobId',
           '/resolver/unknown-ingredients',
           '/resolver/unknown-ingredients/propose',
           '/resolver/unknown-ingredients/apply'
@@ -2495,4 +2911,8 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`resolver_server listening on http://${HOST}:${PORT}`);
+  processQueuedIngestionJobs().catch(() => {});
+  setInterval(() => {
+    processQueuedIngestionJobs().catch(() => {});
+  }, Math.max(5000, INGESTION_POLL_INTERVAL_MS));
 });

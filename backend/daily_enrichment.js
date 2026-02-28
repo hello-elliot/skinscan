@@ -10,7 +10,10 @@ const MISS_PATH = path.join(DATA_DIR, 'coverage_miss_queue.json');
 const FEEDBACK_PATH = path.join(DATA_DIR, 'candidate_feedback_queue.json');
 const NEGATIVE_ALIAS_RULES_PATH = path.join(DATA_DIR, 'negative_alias_rules.json');
 const PROMOTION_REPORT_PATH = path.join(DATA_DIR, 'promotion_report.json');
+const PROMOTION_REPORT_HISTORY_PATH = path.join(DATA_DIR, 'promotion_report_history.json');
 const REVIEW_QUEUE_PATH = path.join(DATA_DIR, 'review_queue.json');
+const ADD_PRODUCT_QUEUE_PATH = path.join(DATA_DIR, 'add_product_queue.json');
+const INGESTION_JOBS_PATH = path.join(DATA_DIR, 'ingestion_jobs.json');
 const UNKNOWN_PATH = path.join(DATA_DIR, 'unknown_ingredient_queue.json');
 const LEARNED_SYNONYMS_PATH = path.join(DATA_DIR, 'ingredient_synonyms_learned.json');
 const INGREDIENT_KNOWLEDGE_PATH = path.join(DATA_DIR, 'ingredient_knowledge.json');
@@ -103,6 +106,30 @@ function isOlderThanDays(iso, days) {
   return ageMs > days * 24 * 60 * 60 * 1000;
 }
 
+function createId(prefix = 'job') {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function compactQueueItems(items, maxItems = 5000, keepProcessedDays = 30) {
+  const filtered = (items || []).filter(item => {
+    if (!item) return false;
+    if (!item.processedAt) return true;
+    return !isOlderThanDays(item.processedAt, keepProcessedDays);
+  });
+  if (filtered.length <= maxItems) return filtered;
+  return filtered.slice(filtered.length - maxItems);
+}
+
+function compactJobs(items, maxItems = 5000, keepCompletedDays = 30) {
+  const filtered = (items || []).filter(item => {
+    if (!item) return false;
+    if (!['completed', 'failed'].includes(item.state)) return true;
+    return !isOlderThanDays(item.updatedAt || item.createdAt || '', keepCompletedDays);
+  });
+  if (filtered.length <= maxItems) return filtered;
+  return filtered.slice(filtered.length - maxItems);
+}
+
 function dedupeProducts(products) {
   const byKey = new Map();
   products.forEach(p => {
@@ -146,6 +173,9 @@ function main() {
   const missQueue = readJson(MISS_PATH, { items: [] });
   const feedbackQueue = readJson(FEEDBACK_PATH, { items: [] });
   const negativeAliasRules = readJson(NEGATIVE_ALIAS_RULES_PATH, { rules: {} });
+  const addProductQueue = readJson(ADD_PRODUCT_QUEUE_PATH, { items: [] });
+  const ingestionJobs = readJson(INGESTION_JOBS_PATH, { items: [] });
+  const promotionHistory = readJson(PROMOTION_REPORT_HISTORY_PATH, { items: [] });
   const unknownQueue = readJson(UNKNOWN_PATH, { items: [] });
   const learned = readJson(LEARNED_SYNONYMS_PATH, { items: [] });
   const ingredientKnowledge = readJson(INGREDIENT_KNOWLEDGE_PATH, { canonical: {}, synonyms: {}, family_rules: [] });
@@ -156,6 +186,7 @@ function main() {
   const promotionReport = [];
   const reviewQueue = [];
   const promotedUnknowns = [];
+  const seededIngestionJobs = [];
   let autoApproved = 0;
 
   const normalizedProducts = index.products.map(p => ({
@@ -213,6 +244,56 @@ function main() {
       lastSeenAt: missQueue.items.find(x => normalizeText(x.normalizedQuery || x.rawQuery || '') === q)?.lastSeenAt || new Date().toISOString()
     });
   });
+
+  // Seed web-ingestion queue from frequent misses and high-traffic feedback queries.
+  const nowIso = new Date().toISOString();
+  const existingQueuedKeys = new Set(
+    (addProductQueue.items || [])
+      .filter(x => x && (x.state === 'queued' || x.state === 'processing'))
+      .map(x => normalizeText(x.payload?.query || ''))
+      .filter(Boolean)
+  );
+  const pushSeededIngestion = (query, source) => {
+    const normalizedQuery = normalizeText(query);
+    if (!normalizedQuery || existingQueuedKeys.has(normalizedQuery)) return;
+    existingQueuedKeys.add(normalizedQuery);
+    const jobId = createId('ingest');
+    addProductQueue.items.push({
+      jobId,
+      state: 'queued',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      processedAt: '',
+      source,
+      payload: {
+        query: normalizedQuery,
+        productUrl: '',
+        barcode: '',
+        imageUrl: '',
+        ingredientsText: '',
+        locale: 'en-US',
+        region: 'US'
+      }
+    });
+    ingestionJobs.items.push({
+      jobId,
+      state: 'queued',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      productId: '',
+      reason: '',
+      source
+    });
+    seededIngestionJobs.push({ jobId, query: normalizedQuery, source });
+  };
+  unresolvedMisses
+    .filter(miss => Number(miss.count || 0) >= 3)
+    .slice(0, 120)
+    .forEach(miss => pushSeededIngestion(miss.query, 'miss_queue'));
+  feedbackQueue.items
+    .filter(item => countRecentSelections(item.dailySelections || {}, 1) >= 3)
+    .slice(0, 120)
+    .forEach(item => pushSeededIngestion(item.normalizedQuery || '', 'feedback_queue'));
 
   // Candidate feedback promotion loop: auto-promote only when confidence is strong, route conflicts to review queue.
   feedbackQueue.items.forEach(item => {
@@ -405,14 +486,29 @@ function main() {
     updated_at: new Date().toISOString(),
     rules: negativeAliasRules.rules || {}
   });
-  writeJson(PROMOTION_REPORT_PATH, {
+  const promotionReportPayload = {
     generated_at: new Date().toISOString(),
     items: promotionReport
+  };
+  writeJson(PROMOTION_REPORT_PATH, promotionReportPayload);
+  promotionHistory.items = Array.isArray(promotionHistory.items) ? promotionHistory.items : [];
+  promotionHistory.items.push({
+    generated_at: promotionReportPayload.generated_at,
+    count: promotionReport.length,
+    items: promotionReport.slice(0, 250)
   });
+  if (promotionHistory.items.length > 120) {
+    promotionHistory.items = promotionHistory.items.slice(promotionHistory.items.length - 120);
+  }
+  writeJson(PROMOTION_REPORT_HISTORY_PATH, promotionHistory);
   writeJson(REVIEW_QUEUE_PATH, {
     generated_at: new Date().toISOString(),
     items: reviewQueue
   });
+  addProductQueue.items = compactQueueItems(addProductQueue.items || [], 5000, 30);
+  ingestionJobs.items = compactJobs(ingestionJobs.items || [], 5000, 30);
+  writeJson(ADD_PRODUCT_QUEUE_PATH, addProductQueue);
+  writeJson(INGESTION_JOBS_PATH, ingestionJobs);
   writeJson(INDEX_PATH, index);
   writeJson(CATALOG_PATH, catalog);
   writeJson(LEARNED_SYNONYMS_PATH, learned);
@@ -427,6 +523,7 @@ function main() {
     promotedMisses: promoted.length,
     unresolvedMisses: unresolvedMisses.length,
     autoPromotions: promotionReport.length,
+    seededIngestionJobs: seededIngestionJobs.length,
     reviewQueueCount: reviewQueue.length,
     brandLexiconSize: buildBrandLexicon(index.products).length,
     promotedUnknowns: promotedUnknowns.length,
