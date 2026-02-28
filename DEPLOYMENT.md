@@ -1,46 +1,40 @@
-# Dynamic Hosting Setup (Render only, auto-deploy from GitHub)
+# Simplest Deploy (Render Free)
 
-Use Render for both backend and frontend so you get one-time setup and automatic updates on every push.
+This setup keeps quality/security and removes paid Blueprint dependency.
 
-## 1) Create services from Blueprint
+## 1) Backend (already done)
 
-1. In Render, click `New` -> `Blueprint`.
-2. Connect repo: `hello-elliot/skinscan`.
-3. Choose branch: `codex/coverage-reliability-backend` (or `main` after merge).
-4. Render reads [render.yaml](/Users/ksenia.zvereva/Documents/New%20project/render.yaml) and creates:
-   - `skinscan-resolver-api` (backend API)
-   - `skinscan-frontend` (public static app)
+Backend URL: `https://skinscan-3bgp.onrender.com`
 
-## 2) Wire frontend to backend once
+Health check:
 
-After first deploy:
+`https://skinscan-3bgp.onrender.com/healthz`
 
-1. Open backend service URL (example: `https://skinscan-3bgp.onrender.com`).
-2. Open frontend service `Environment`.
-3. Set `RESOLVER_API_URL` to backend URL.
-4. Trigger manual redeploy for frontend once.
+## 2) Frontend (manual, one-time)
 
-From then on, every GitHub push to the connected branch auto-deploys both services.
+Create Render `Static Site`:
 
-## 3) Public URLs
+1. Repo: `hello-elliot/skinscan`
+2. Branch: `codex/coverage-reliability-backend`
+3. Build Command: `bash scripts/build_pages.sh`
+4. Publish Directory: `public`
 
-- Frontend (share this): `https://<frontend-service>.onrender.com`
-- Backend API:
-  - `GET /healthz`
-  - `POST /resolver/products`
-  - `GET /resolver/coverage-metrics`
+No env vars required. Build script already injects backend URL by default.
 
-## 4) Verify end-to-end
+## 3) What you get
 
-1. Open frontend URL.
-2. Search:
-   - `estee lauder advanced night repair serum`
-   - `dr althea 365`
-3. In browser Network tab, verify calls to:
-   - `https://<backend>/resolver/products`
+- Public app URL: `https://<your-static-site>.onrender.com`
+- Auto-deploy on every push to branch
+- Frontend calls backend API automatically
 
-## 5) Daily enrichment (manual for now)
+## 4) Quick validation
 
-```bash
-node backend/daily_enrichment.js
-```
+In app search:
+
+- `estee lauder advanced night repair serum`
+- `dr althea 365`
+- `esta louder night repair`
+
+In Network tab confirm calls to:
+
+`https://skinscan-3bgp.onrender.com/resolver/products`

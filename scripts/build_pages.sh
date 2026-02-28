@@ -15,7 +15,7 @@ mkdir -p "$OUT_DIR"
 
 RESOLVER_URL="${RESOLVER_API_URL:-}"
 if [ -z "$RESOLVER_URL" ]; then
-  RESOLVER_URL="https://REPLACE_WITH_RESOLVER_API.example.com"
+  RESOLVER_URL="https://skinscan-3bgp.onrender.com"
 fi
 
 INJECT_SCRIPT="<script>window.__SKINSCAN_RESOLVER_API_URL='${RESOLVER_URL}';</script>"
