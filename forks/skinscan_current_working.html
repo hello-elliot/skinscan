@@ -789,7 +789,6 @@ const CONDITION_SKIN_TYPES = new Set(['acne-prone', 'sensitive']);
 function normalizeSelectedSkinTypes(saved = []) {
   const out = new Set(Array.isArray(saved) ? saved : []);
   if (out.has('dry') && out.has('normal')) out.delete('normal');
-  if (!out.has('dry') && !out.has('normal')) out.add('normal');
   return out;
 }
 // Restore skin type from localStorage if available
@@ -877,10 +876,10 @@ document.querySelectorAll('.chip').forEach(c => {
         else selectedTypes.add('dry');
         selectedTypes.delete('normal');
       } else if (t === 'normal') {
-        selectedTypes.add('normal');
-        selectedTypes.delete('dry');
+        if (selectedTypes.has('normal')) selectedTypes.delete('normal');
+        else selectedTypes.add('normal');
+        if (selectedTypes.has('normal')) selectedTypes.delete('dry');
       }
-      if (!selectedTypes.has('dry') && !selectedTypes.has('normal')) selectedTypes.add('normal');
     } else if (CONDITION_SKIN_TYPES.has(t)) {
       selectedTypes.has(t) ? selectedTypes.delete(t) : selectedTypes.add(t);
     } else {
