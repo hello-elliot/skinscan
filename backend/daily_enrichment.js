@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const INDEX_PATH = path.join(DATA_DIR, 'product_index.json');
@@ -19,6 +20,10 @@ const LEARNED_SYNONYMS_PATH = path.join(DATA_DIR, 'ingredient_synonyms_learned.j
 const INGREDIENT_KNOWLEDGE_PATH = path.join(DATA_DIR, 'ingredient_knowledge.json');
 const INGREDIENT_PROPOSALS_PATH = path.join(DATA_DIR, 'ingredient_proposals.json');
 const FRONTEND_INGREDIENT_OVERRIDES_PATH = path.join(DATA_DIR, 'frontend_ingredient_overrides.json');
+const CANONICAL_INDEX_PATH = path.join(DATA_DIR, 'ingredient_canonical_index.json');
+const INGREDIENT_INGESTION_REPORT_PATH = path.join(DATA_DIR, 'ingredient_ingestion_report.json');
+const INGEST_COSING_SCRIPT_PATH = path.join(__dirname, 'ingest_cosing.js');
+const ENRICH_PUBCHEM_SCRIPT_PATH = path.join(__dirname, 'enrich_pubchem.js');
 
 function readJson(filePath, fallback) {
   try {
@@ -167,7 +172,65 @@ function shouldAutoApproveProposal(proposal) {
   return false;
 }
 
+function runNodeScript(scriptPath, args = []) {
+  const run = spawnSync(process.execPath, [scriptPath, ...args], {
+    cwd: path.join(__dirname, '..'),
+    env: process.env,
+    encoding: 'utf8',
+    timeout: 120000
+  });
+  if (run.error) throw run.error;
+  if (run.status !== 0) {
+    const stderr = String(run.stderr || '').trim();
+    const stdout = String(run.stdout || '').trim();
+    throw new Error(stderr || stdout || `script_failed_${path.basename(scriptPath)}`);
+  }
+  const stdout = String(run.stdout || '').trim();
+  if (!stdout) return { ok: true };
+  try {
+    return JSON.parse(stdout.split('\n').slice(-1)[0]);
+  } catch (_) {
+    return { ok: true, output: stdout };
+  }
+}
+
+function readCanonicalIndex() {
+  return readJson(CANONICAL_INDEX_PATH, { version: 1, source: 'cosing', items: [] });
+}
+
+function mergeCanonicalSynonymsIntoFrontendOverrides(frontendOverrides, canonicalIndex, ingredientKnowledge) {
+  const db = frontendOverrides.db || {};
+  const aliases = frontendOverrides.aliases || {};
+  const synonyms = frontendOverrides.synonyms || {};
+  for (const item of (canonicalIndex.items || [])) {
+    const canonicalId = normalizeIngredientToken(item.canonicalId || item.inciName || '');
+    if (!canonicalId) continue;
+    if (!db[canonicalId] && !ingredientKnowledge.canonical[canonicalId]) continue;
+    const targets = [];
+    if (item.inciName) targets.push(item.inciName);
+    (item.synonyms || []).forEach(s => targets.push(s));
+    targets
+      .map(normalizeIngredientToken)
+      .filter(Boolean)
+      .forEach(key => {
+        aliases[key] = canonicalId;
+        synonyms[key] = canonicalId;
+      });
+  }
+  frontendOverrides.aliases = aliases;
+  frontendOverrides.synonyms = synonyms;
+  return frontendOverrides;
+}
+
 function main() {
+  let cosingResult = { ok: false, skipped: true };
+  let pubchemResult = { ok: false, skipped: true };
+  try {
+    cosingResult = runNodeScript(INGEST_COSING_SCRIPT_PATH);
+  } catch (err) {
+    cosingResult = { ok: false, error: String(err?.message || 'ingest_failed') };
+  }
+
   const index = readJson(INDEX_PATH, { version: 1, last_updated: new Date().toISOString(), products: [] });
   const catalog = readJson(CATALOG_PATH, { version: 1, last_updated: new Date().toISOString(), products: [] });
   const missQueue = readJson(MISS_PATH, { items: [] });
@@ -188,6 +251,7 @@ function main() {
   const promotedUnknowns = [];
   const seededIngestionJobs = [];
   let autoApproved = 0;
+  const unknownTokensForTargetedEnrichment = [];
 
   const normalizedProducts = index.products.map(p => ({
     ...p,
@@ -382,6 +446,7 @@ function main() {
   unknownQueue.items.forEach(item => {
     if ((item.count || 0) < 3) return;
     if (!item.normalizedToken) return;
+    unknownTokensForTargetedEnrichment.push(normalizeIngredientToken(item.normalizedToken));
     const exists = learned.items.some(x => x.normalizedToken === item.normalizedToken);
     if (exists) return;
     learned.items.push({
@@ -423,6 +488,24 @@ function main() {
       });
     }
   });
+
+  try {
+    const canonicalIndexBefore = readCanonicalIndex();
+    if ((canonicalIndexBefore.items || []).length) {
+      const args = [];
+      const uniqueUnknownTokens = [...new Set(unknownTokensForTargetedEnrichment)].slice(0, 200);
+      if (uniqueUnknownTokens.length) {
+        args.push('--tokens', uniqueUnknownTokens.join('|'));
+      } else {
+        args.push('--max-items', '120');
+      }
+      pubchemResult = runNodeScript(ENRICH_PUBCHEM_SCRIPT_PATH, args);
+    } else {
+      pubchemResult = { ok: false, skipped: true, reason: 'canonical_index_empty' };
+    }
+  } catch (err) {
+    pubchemResult = { ok: false, error: String(err?.message || 'pubchem_enrich_failed') };
+  }
 
   ingredientProposals.items.forEach(p => {
     if (!shouldAutoApproveProposal(p)) return;
@@ -514,7 +597,14 @@ function main() {
   writeJson(LEARNED_SYNONYMS_PATH, learned);
   writeJson(INGREDIENT_KNOWLEDGE_PATH, ingredientKnowledge);
   writeJson(INGREDIENT_PROPOSALS_PATH, ingredientProposals);
+  const canonicalIndex = readCanonicalIndex();
+  mergeCanonicalSynonymsIntoFrontendOverrides(frontendOverrides, canonicalIndex, ingredientKnowledge);
   writeJson(FRONTEND_INGREDIENT_OVERRIDES_PATH, frontendOverrides);
+  const ingestionReport = readJson(INGREDIENT_INGESTION_REPORT_PATH, { generatedAt: new Date().toISOString(), cosing: {}, pubchem: {}, notes: [] });
+  ingestionReport.generatedAt = new Date().toISOString();
+  ingestionReport.cosing = cosingResult || {};
+  ingestionReport.pubchem = pubchemResult || {};
+  writeJson(INGREDIENT_INGESTION_REPORT_PATH, ingestionReport);
 
   console.log(JSON.stringify({
     ok: true,
@@ -528,7 +618,9 @@ function main() {
     brandLexiconSize: buildBrandLexicon(index.products).length,
     promotedUnknowns: promotedUnknowns.length,
     proposalCount: ingredientProposals.items.length,
-    autoApproved
+    autoApproved,
+    cosingIngestion: cosingResult,
+    pubchemEnrichment: pubchemResult
   }, null, 2));
 }
 

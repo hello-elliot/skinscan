@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const dns = require('dns');
 const net = require('net');
+const { spawnSync, spawn } = require('child_process');
 
 const HOST = process.env.RESOLVER_HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || process.env.RESOLVER_PORT || 8788);
@@ -25,6 +26,10 @@ const SOURCE_PROFILE_PATH = path.join(DATA_DIR, 'product_source_profiles.json');
 const INGREDIENT_KNOWLEDGE_PATH = path.join(DATA_DIR, 'ingredient_knowledge.json');
 const INGREDIENT_PROPOSALS_PATH = path.join(DATA_DIR, 'ingredient_proposals.json');
 const FRONTEND_INGREDIENT_OVERRIDES_PATH = path.join(DATA_DIR, 'frontend_ingredient_overrides.json');
+const INGREDIENT_CANONICAL_INDEX_PATH = path.join(DATA_DIR, 'ingredient_canonical_index.json');
+const INGREDIENT_INGESTION_REPORT_PATH = path.join(DATA_DIR, 'ingredient_ingestion_report.json');
+const INGEST_COSING_SCRIPT_PATH = path.join(__dirname, 'ingest_cosing.js');
+const ENRICH_PUBCHEM_SCRIPT_PATH = path.join(__dirname, 'enrich_pubchem.js');
 
 const SOURCE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SOURCE_TIMEOUT_MS = 3000;
@@ -292,7 +297,40 @@ function formatCanonicalName(name) {
   return normalizeIngredientToken(name).replace(/[^\w\s\/\-.+]/g, '').trim();
 }
 
-function resolveIngredientKnowledge(token, knowledge) {
+function readCanonicalIngredientIndex() {
+  const source = readJson(INGREDIENT_CANONICAL_INDEX_PATH, {
+    version: 1,
+    source: 'cosing',
+    updatedAt: nowIso(),
+    sourceFile: '',
+    items: []
+  });
+  return {
+    version: source.version || 1,
+    source: source.source || 'cosing',
+    updatedAt: source.updatedAt || '',
+    sourceFile: source.sourceFile || '',
+    items: Array.isArray(source.items) ? source.items : []
+  };
+}
+
+function buildCanonicalSynonymLookup(canonicalIndex) {
+  const map = {};
+  for (const item of canonicalIndex.items || []) {
+    const canonicalId = formatCanonicalName(item.canonicalId || item.inciName || '');
+    if (!canonicalId) continue;
+    map[canonicalId] = canonicalId;
+    const inciName = formatCanonicalName(item.inciName || '');
+    if (inciName) map[inciName] = canonicalId;
+    for (const syn of (item.synonyms || [])) {
+      const key = formatCanonicalName(syn);
+      if (key) map[key] = canonicalId;
+    }
+  }
+  return map;
+}
+
+function resolveIngredientKnowledge(token, knowledge, canonicalLookup = null) {
   const normalizedToken = normalizeIngredientToken(token);
   if (!normalizedToken) return { normalizedToken: '', matchType: 'unknown', canonicalId: '', confidence: 'low' };
   if (knowledge.canonical[normalizedToken]) {
@@ -301,6 +339,12 @@ function resolveIngredientKnowledge(token, knowledge) {
   const mapped = knowledge.synonyms[normalizedToken];
   if (mapped && knowledge.canonical[mapped]) {
     return { normalizedToken, matchType: 'synonym', canonicalId: mapped, confidence: 'medium' };
+  }
+  if (canonicalLookup && canonicalLookup[normalizedToken]) {
+    const canonicalId = canonicalLookup[normalizedToken];
+    if (knowledge.canonical[canonicalId]) {
+      return { normalizedToken, matchType: 'synonym', canonicalId, confidence: 'medium' };
+    }
   }
   for (const rule of knowledge.family_rules) {
     try {
@@ -2203,7 +2247,9 @@ function validateIngredientProposal(raw, token, knowledge) {
 
 function heuristicIngredientProposal(token, knowledge) {
   const t = normalizeIngredientToken(token);
-  const known = resolveIngredientKnowledge(t, knowledge);
+  const canonicalIndex = readCanonicalIngredientIndex();
+  const canonicalLookup = buildCanonicalSynonymLookup(canonicalIndex);
+  const known = resolveIngredientKnowledge(t, knowledge, canonicalLookup);
   if (known.canonicalId) {
     return {
       canonicalName: known.canonicalId,
@@ -2550,10 +2596,12 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
       upsertCatalogProducts([product]);
 
       const knowledge = readIngredientKnowledge();
+      const canonicalIndex = readCanonicalIngredientIndex();
+      const canonicalLookup = buildCanonicalSynonymLookup(canonicalIndex);
       const tokens = ingredientTokens(normalizedIngredients);
       const matchTypeCount = { exact: 0, synonym: 0, family: 0, generic_extract: 0, unknown: 0 };
       tokens.forEach(token => {
-        const resolved = resolveIngredientKnowledge(token, knowledge);
+        const resolved = resolveIngredientKnowledge(token, knowledge, canonicalLookup);
         if (matchTypeCount[resolved.matchType] !== undefined) matchTypeCount[resolved.matchType] += 1;
         if (resolved.matchType === 'unknown') upsertUnknownIngredient(token, 'resolver_enriched', productId);
       });
@@ -2933,16 +2981,94 @@ function handleIngestionStatus(_req, res, jobId) {
   });
 }
 
+function runNodeScript(scriptPath, args = []) {
+  const run = spawnSync(process.execPath, [scriptPath, ...args], {
+    cwd: path.join(__dirname, '..'),
+    env: process.env,
+    encoding: 'utf8',
+    timeout: 120000
+  });
+  if (run.error) throw run.error;
+  if (run.status !== 0) {
+    const stderr = String(run.stderr || '').trim();
+    const stdout = String(run.stdout || '').trim();
+    throw new Error(stderr || stdout || `script_failed_${path.basename(scriptPath)}`);
+  }
+  const stdout = String(run.stdout || '').trim();
+  if (!stdout) return { ok: true };
+  try {
+    return JSON.parse(stdout.split('\n').slice(-1)[0]);
+  } catch (_) {
+    return { ok: true, output: stdout };
+  }
+}
+
+function enqueuePubchemEnrichment(tokens = []) {
+  const clean = [...new Set((tokens || []).map(normalizeIngredientToken).filter(Boolean))].slice(0, 100);
+  if (!clean.length) return;
+  const child = spawn(process.execPath, [ENRICH_PUBCHEM_SCRIPT_PATH, '--tokens', clean.join('|')], {
+    cwd: path.join(__dirname, '..'),
+    env: process.env,
+    stdio: 'ignore',
+    detached: false
+  });
+  child.on('error', () => {});
+}
+
+async function handleIngestCosing(_req, res) {
+  try {
+    const result = runNodeScript(INGEST_COSING_SCRIPT_PATH);
+    pushMetric('ingredient_cosing_ingest_run', {
+      ok: !!result.ok,
+      imported: Number(result.imported || 0),
+      updated: Number(result.updated || 0),
+      canonicalCount: Number(result.canonicalCount || 0)
+    });
+    sendJson(res, 200, { ok: true, result });
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: String(err?.message || 'ingest_failed') });
+  }
+}
+
+async function handleEnrichPubchem(req, res) {
+  const body = await readBody(req);
+  const tokens = Array.isArray(body.tokens)
+    ? body.tokens.map(normalizeIngredientToken).filter(Boolean).slice(0, 200)
+    : [];
+  const maxItems = Number(body.maxItems || 120);
+  const args = [];
+  if (tokens.length) args.push('--tokens', tokens.join('|'));
+  if (Number.isFinite(maxItems) && maxItems > 0) args.push('--max-items', String(Math.min(500, maxItems)));
+  try {
+    const result = runNodeScript(ENRICH_PUBCHEM_SCRIPT_PATH, args);
+    pushMetric('ingredient_pubchem_enrich_run', {
+      ok: !!result.ok,
+      scanned: Number(result.scanned || 0),
+      enriched: Number(result.enriched || 0),
+      ambiguous: Number(result.ambiguous || 0),
+      failed: Number(result.failed || 0)
+    });
+    sendJson(res, 200, { ok: true, result });
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: String(err?.message || 'enrichment_failed') });
+  }
+}
+
 async function handleUnknownIngredients(req, res) {
   const body = await readBody(req);
   const items = Array.isArray(body.items) ? body.items : [];
   const source = String(body.source || 'client').trim() || 'client';
   const sourceProductId = String(body.sourceProductId || body.productId || '').trim();
   let count = 0;
+  const triggerTokens = [];
   for (const token of items) {
     const rec = upsertUnknownIngredient(String(token || ''), source, sourceProductId);
-    if (rec) count += 1;
+    if (rec) {
+      count += 1;
+      if (Number(rec.count || 0) >= 3) triggerTokens.push(rec.normalizedToken);
+    }
   }
+  if (triggerTokens.length) enqueuePubchemEnrichment(triggerTokens);
   pushMetric('unknown_ingredient_ingested', { count, source });
   sendJson(res, 200, { ok: true, count });
 }
@@ -3057,6 +3183,8 @@ function handleCoverageMetrics(_req, res) {
   const catalog = readCatalog();
   const unknown = readJson(UNKNOWN_QUEUE_PATH, { items: [] });
   const proposals = readIngredientProposals();
+  const canonicalIndex = readCanonicalIngredientIndex();
+  const ingredientKnowledge = readIngredientKnowledge();
   const contractCheck = runResolverContractSmokeCheck();
   const last24h = Date.now() - (24 * 60 * 60 * 1000);
   const recentEvents = metrics.events.filter(e => Date.parse(e.ts) >= last24h);
@@ -3108,6 +3236,9 @@ function handleCoverageMetrics(_req, res) {
       proposalCount: proposals.items.length,
       proposalPending: proposals.items.filter(x => x.state === 'proposed').length,
       proposalApproved: proposals.items.filter(x => x.state === 'approved_auto' || x.state === 'approved_manual').length,
+      canonicalIngredientCount: (canonicalIndex.items || []).length,
+      ratedIngredientCount: Object.keys(ingredientKnowledge.canonical || {}).length,
+      ratedSynonymCount: Object.keys(ingredientKnowledge.synonyms || {}).length,
       addProductQueueCount: addProductQueue.items.length,
       addProductPendingCount: addProductQueue.items.filter(x => x.state === 'queued' || x.state === 'processing').length,
       ingestionJobsCount: ingestionJobs.items.length,
@@ -3133,6 +3264,45 @@ function handleCoverageMetrics(_req, res) {
   };
   if (!contractCheck.ok) payload.error = 'contract_check_failed';
   sendJson(res, 200, payload);
+}
+
+function handleIngredientCoverageMetrics(_req, res) {
+  const metrics = readJson(METRICS_PATH, { events: [] });
+  const canonicalIndex = readCanonicalIngredientIndex();
+  const knowledge = readIngredientKnowledge();
+  const unknown = readJson(UNKNOWN_QUEUE_PATH, { items: [] });
+  const report = readJson(INGREDIENT_INGESTION_REPORT_PATH, {
+    generatedAt: '',
+    cosing: {},
+    pubchem: {}
+  });
+  const last24h = Date.now() - (24 * 60 * 60 * 1000);
+  const recentEvents = metrics.events.filter(e => Date.parse(e.ts) >= last24h);
+  const aggregate = { exact: 0, synonym: 0, family: 0, generic_extract: 0, unknown: 0 };
+  recentEvents
+    .filter(e => e.name === 'ingredient_resolve_succeeded' && e.payload?.matchTypeCount)
+    .forEach(e => {
+      Object.keys(aggregate).forEach(key => {
+        aggregate[key] += Number(e.payload.matchTypeCount[key] || 0);
+      });
+    });
+  const total = Object.values(aggregate).reduce((sum, v) => sum + v, 0);
+  const rate = key => total ? Number((aggregate[key] / total).toFixed(4)) : 0;
+  sendJson(res, 200, {
+    canonicalCount: (canonicalIndex.items || []).length,
+    ratedCanonicalCount: Object.keys(knowledge.canonical || {}).length,
+    synonymCount: Object.keys(knowledge.synonyms || {}).length,
+    unknownQueueCount: Array.isArray(unknown.items) ? unknown.items.length : 0,
+    exactMatchRate: rate('exact'),
+    synonymMatchRate: rate('synonym'),
+    familyMatchRate: rate('family'),
+    unknownRate: rate('unknown'),
+    sourceReports: {
+      generatedAt: report.generatedAt || '',
+      cosing: report.cosing || {},
+      pubchem: report.pubchem || {}
+    }
+  });
 }
 
 const server = http.createServer(async (req, res) => {
@@ -3179,6 +3349,16 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && url.pathname === '/resolver/ingredients/ingest-cosing') {
+      await handleIngestCosing(req, res);
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/resolver/ingredients/enrich-pubchem') {
+      await handleEnrichPubchem(req, res);
+      return;
+    }
+
     const statusMatch = url.pathname.match(/^\/resolver\/products\/([^/]+)\/ingredients-status$/);
     if (req.method === 'GET' && statusMatch) {
       await handleIngredientsStatus(req, res, decodeURIComponent(statusMatch[1]));
@@ -3193,6 +3373,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/resolver/coverage-metrics') {
       handleCoverageMetrics(req, res);
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/resolver/ingredients/coverage-metrics') {
+      handleIngredientCoverageMetrics(req, res);
       return;
     }
 
@@ -3225,7 +3410,10 @@ const server = http.createServer(async (req, res) => {
           '/resolver/ingestion-status/:jobId',
           '/resolver/unknown-ingredients',
           '/resolver/unknown-ingredients/propose',
-          '/resolver/unknown-ingredients/apply'
+          '/resolver/unknown-ingredients/apply',
+          '/resolver/ingredients/ingest-cosing',
+          '/resolver/ingredients/enrich-pubchem',
+          '/resolver/ingredients/coverage-metrics'
         ]
       });
       return;

@@ -42,6 +42,28 @@ It now also consumes `candidate_feedback_queue.json` to:
 - seed ingestion jobs from frequent misses/feedback into `add_product_queue.json`
 - compact append-only queue/job files and append promotion snapshots to `promotion_report_history.json`
 
+It also runs ingredient coverage flywheel tasks:
+- CosIng canonical ingest (`backend/ingest_cosing.js`) when import file exists in `backend/data/import/`
+- PubChem identifier/synonym enrichment (`backend/enrich_pubchem.js`)
+- canonical synonym merge into `frontend_ingredient_overrides.json`
+
+## Ingredient Ingestion Scripts
+
+```bash
+node backend/ingest_cosing.js
+node backend/enrich_pubchem.js
+```
+
+Optional targeted enrichment:
+
+```bash
+node backend/enrich_pubchem.js --tokens "METHYL GLUCETH-20|SODIUM DNA" --max-items 50
+```
+
+CosIng import discovery:
+- place latest export in `backend/data/import/`
+- filename must include `cosing` and extension `.csv`, `.tsv`, or `.txt`
+
 ## API
 
 ### `POST /resolver/products`
@@ -203,6 +225,27 @@ Actions: `approve`, `reject`, `approve_provisional`.
 Returns index stats, miss queue, contract smoke status, and 24h resolver KPI snapshot.
 If contract fields are missing (`decisionReason` / `autoResolved`), KPI output is blocked (`kpi: null`).
 
+### `POST /resolver/ingredients/ingest-cosing`
+
+Triggers canonical CosIng ingestion pipeline and returns ingestion summary.
+
+### `POST /resolver/ingredients/enrich-pubchem`
+
+Triggers PubChem enrichment. Optional body:
+
+```json
+{ "tokens": ["METHYL GLUCETH-20", "SODIUM DNA"], "maxItems": 80 }
+```
+
+### `GET /resolver/ingredients/coverage-metrics`
+
+Returns ingredient-level coverage KPIs:
+- `exactMatchRate`
+- `synonymMatchRate`
+- `familyMatchRate`
+- `unknownRate`
+- canonical/rated counts and latest ingestion report.
+
 ### `GET /resolver/smoke-check`
 
 Returns resolver contract smoke-check status for key canary queries.
@@ -239,4 +282,6 @@ Checks live deploy contract shape:
 - `backend/data/ingredient_knowledge.json` canonical ingredient + synonym + family rules
 - `backend/data/ingredient_proposals.json` proposal pipeline state
 - `backend/data/frontend_ingredient_overrides.json` runtime UI ingredient override payload
+- `backend/data/ingredient_canonical_index.json` CosIng-backed canonical ingredient index
+- `backend/data/ingredient_ingestion_report.json` latest CosIng/PubChem ingestion summary
 - `backend/data/product_source_profiles.json` curated PDP sources for top products
