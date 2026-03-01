@@ -755,7 +755,7 @@ function dbLookup(name) {
 // Replace YOUR_WORKER_URL with your Cloudflare Worker URL after deploying.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const PROXY_URL = 'https://skinscan-proxy.kelly-f.workers.dev';
-const RESOLVER_API_URL = window.__SKINSCAN_RESOLVER_API_URL || 'http://127.0.0.1:8788';
+const RESOLVER_API_URL = window.__SKINSCAN_RESOLVER_API_URL || 'https://skinscan-resolver-api.onrender.com';
 
 // All Anthropic API calls go through the proxy — no key in the client
 function apiUrl()     { return PROXY_URL + '/v1/messages'; }
@@ -1764,7 +1764,34 @@ async function resolveProductFromBackend(query) {
 }
 async function resolveProduct(query, options = {}) {
   const backend = await resolveProductFromBackend(query);
-  if (backend && backend.state && backend.state !== 'error') return backend;
+  if (backend && backend.state && backend.state !== 'error') {
+    const backendLowSignal = (
+      backend.state === 'not_found'
+      || (backend.state === 'candidate_list' && (
+        !Array.isArray(backend.candidates)
+        || backend.candidates.length === 0
+        || backend.decisionReason === 'unknown_brand'
+      ))
+    );
+    if (!backendLowSignal) return backend;
+
+    const local = await resolveProductLocal(query, options);
+    const localHasSignal = (
+      local.state === 'resolved_high'
+      || local.state === 'resolved_medium'
+      || (local.state === 'candidate_list' && Array.isArray(local.candidates) && local.candidates.length > 0)
+    );
+    if (localHasSignal) {
+      trackEvent('resolver_fallback_local_used', {
+        query,
+        backendState: backend.state,
+        backendDecisionReason: backend.decisionReason || '',
+        localState: local.state
+      });
+      return local;
+    }
+    return backend;
+  }
   return resolveProductLocal(query, options);
 }
 async function sendCandidateSelectionFeedback(payload) {
