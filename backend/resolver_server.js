@@ -3,6 +3,8 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const dns = require('dns');
+const net = require('net');
 
 const HOST = process.env.RESOLVER_HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || process.env.RESOLVER_PORT || 8788);
@@ -35,6 +37,10 @@ const AI_FALLBACK_ENABLED = String(process.env.AI_FALLBACK_ENABLED || 'true').to
 const AUTO_RESOLVE_ENABLED = String(process.env.AUTO_RESOLVE_ENABLED || 'true').toLowerCase() !== 'false';
 const STRICT_BRAND_GATE_ENABLED = String(process.env.STRICT_BRAND_GATE_ENABLED || 'true').toLowerCase() !== 'false';
 const INGESTION_POLL_INTERVAL_MS = Number(process.env.INGESTION_POLL_INTERVAL_MS || 30000);
+const INGESTION_REDIRECT_LIMIT = Number(process.env.INGESTION_REDIRECT_LIMIT || 5);
+const INGESTION_RESPONSE_MAX_BYTES = Number(process.env.INGESTION_RESPONSE_MAX_BYTES || (1.5 * 1024 * 1024));
+const INGESTION_FETCH_BUDGET_MS = Number(process.env.INGESTION_FETCH_BUDGET_MS || 12000);
+const INGESTION_ESTIMATED_JOB_MS = Number(process.env.INGESTION_ESTIMATED_JOB_MS || 4000);
 
 const GENERIC_PRODUCT_TOKENS = new Set([
   'serum', 'cream', 'cleanser', 'toner', 'essence', 'mask', 'moisturizer', 'moisturising', 'moisturizing',
@@ -336,6 +342,162 @@ function sanitizeUrl(url) {
     return parsed.toString();
   } catch (_) {
     return '';
+  }
+}
+
+function normalizeIngestionFailureCode(reason, fallback = 'upsert_failed') {
+  const code = String(reason || '').trim().toLowerCase();
+  const map = {
+    invalid_url: 'invalid_url',
+    blocked_host: 'blocked_host',
+    dns_unresolved: 'blocked_host',
+    fetch_timeout: 'fetch_timeout',
+    redirect_limit: 'fetch_timeout',
+    fetch_failed: 'fetch_timeout',
+    response_too_large: 'fetch_timeout',
+    unsupported_content_type: 'parser_no_product',
+    candidate_missing: 'parser_no_product',
+    parser_no_product: 'parser_no_product',
+    missing_brand: 'parser_no_brand',
+    parser_no_brand: 'parser_no_brand',
+    missing_name: 'parser_no_name',
+    parser_no_name: 'parser_no_name',
+    generic_name: 'parser_no_name',
+    weak_similarity: 'low_similarity',
+    low_similarity: 'low_similarity',
+    upsert_failed: 'upsert_failed'
+  };
+  return map[code] || fallback;
+}
+
+function isPrivateIpv4(ip) {
+  const parts = String(ip || '').split('.').map(Number);
+  if (parts.length !== 4 || parts.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+  const [a, b] = parts;
+  if (a === 10) return true;
+  if (a === 127) return true;
+  if (a === 0) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  return false;
+}
+
+function isPrivateIpv6(ip) {
+  const normalized = String(ip || '').toLowerCase();
+  if (!normalized) return false;
+  if (normalized === '::1') return true;
+  if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
+  if (normalized.startsWith('fe8') || normalized.startsWith('fe9') || normalized.startsWith('fea') || normalized.startsWith('feb')) return true;
+  if (normalized.startsWith('::ffff:')) {
+    const mapped = normalized.replace('::ffff:', '');
+    if (net.isIP(mapped) === 4 && isPrivateIpv4(mapped)) return true;
+  }
+  return false;
+}
+
+function hostIsBlocked(hostname) {
+  const host = String(hostname || '').trim().toLowerCase();
+  if (!host) return { blocked: true, failureCode: 'invalid_url' };
+  if (host === 'localhost' || host.endsWith('.localhost')) return { blocked: true, failureCode: 'blocked_host' };
+  if (host.endsWith('.local')) return { blocked: true, failureCode: 'blocked_host' };
+  const ipVersion = net.isIP(host);
+  if (ipVersion === 4 && isPrivateIpv4(host)) return { blocked: true, failureCode: 'blocked_host' };
+  if (ipVersion === 6 && isPrivateIpv6(host)) return { blocked: true, failureCode: 'blocked_host' };
+  return { blocked: false, failureCode: '' };
+}
+
+async function resolvePublicHost(hostname) {
+  const host = String(hostname || '').trim().toLowerCase();
+  const blocked = hostIsBlocked(host);
+  if (blocked.blocked) return { ok: false, failureCode: blocked.failureCode };
+  const ipVersion = net.isIP(host);
+  if (ipVersion === 4 || ipVersion === 6) return { ok: true };
+  try {
+    const addresses = await dns.promises.lookup(host, { all: true, verbatim: true });
+    if (!Array.isArray(addresses) || !addresses.length) {
+      return { ok: false, failureCode: 'dns_unresolved' };
+    }
+    for (const addr of addresses) {
+      const ip = String(addr.address || '');
+      if (!ip) continue;
+      if ((addr.family === 4 || net.isIP(ip) === 4) && isPrivateIpv4(ip)) return { ok: false, failureCode: 'blocked_host' };
+      if ((addr.family === 6 || net.isIP(ip) === 6) && isPrivateIpv6(ip)) return { ok: false, failureCode: 'blocked_host' };
+    }
+    return { ok: true };
+  } catch (_) {
+    return { ok: false, failureCode: 'dns_unresolved' };
+  }
+}
+
+async function fetchPublicPageWithGuards(initialUrl, budgetMs = INGESTION_FETCH_BUDGET_MS) {
+  let currentUrl = sanitizeUrl(initialUrl);
+  if (!currentUrl) throw new Error('invalid_url');
+  const start = Date.now();
+  const seen = new Set();
+  let redirects = 0;
+
+  while (true) {
+    if (Date.now() - start > budgetMs) throw new Error('fetch_timeout');
+    const parsed = new URL(currentUrl);
+    const hostCheck = await resolvePublicHost(parsed.hostname);
+    if (!hostCheck.ok) throw new Error(hostCheck.failureCode || 'blocked_host');
+    if (seen.has(currentUrl)) throw new Error('redirect_limit');
+    seen.add(currentUrl);
+
+    const remainingMs = Math.max(500, budgetMs - (Date.now() - start));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), remainingMs);
+    let res;
+    try {
+      res = await fetch(currentUrl, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: { 'User-Agent': 'SkinScanResolver/1.0 (support@skinscan.local)' }
+      });
+    } catch (error) {
+      clearTimeout(timer);
+      if (String(error?.name || '').toLowerCase().includes('abort')) throw new Error('fetch_timeout');
+      throw new Error('fetch_failed');
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if ([301, 302, 303, 307, 308].includes(res.status)) {
+      const location = String(res.headers.get('location') || '').trim();
+      if (!location) throw new Error('fetch_failed');
+      currentUrl = sanitizeUrl(new URL(location, currentUrl).toString());
+      redirects += 1;
+      if (!currentUrl || redirects > INGESTION_REDIRECT_LIMIT) throw new Error('redirect_limit');
+      continue;
+    }
+    if (!res.ok) throw new Error('fetch_failed');
+
+    const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+    if (!(contentType.includes('text/html') || contentType.includes('application/json') || contentType.includes('application/ld+json'))) {
+      throw new Error('unsupported_content_type');
+    }
+
+    const reader = res.body?.getReader ? res.body.getReader() : null;
+    if (!reader) {
+      const text = await res.text();
+      if (Buffer.byteLength(text, 'utf8') > INGESTION_RESPONSE_MAX_BYTES) throw new Error('response_too_large');
+      return { finalUrl: currentUrl, text };
+    }
+
+    const chunks = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      total += chunk.length;
+      if (total > INGESTION_RESPONSE_MAX_BYTES) throw new Error('response_too_large');
+      chunks.push(chunk);
+    }
+    return { finalUrl: currentUrl, text: Buffer.concat(chunks).toString('utf8') };
   }
 }
 
@@ -688,10 +850,11 @@ function classify(ranked, options = {}) {
   );
   const exactHigh = highQuality && (top.exactNameMatch || top.nameSimilarity >= 0.92);
   const unknownBrandCandidates = rankedWithGaps
-    .filter(item => item.nameSimilarity >= 0.52 || item.brandSimilarity >= 0.52 || item.score >= 0.72)
+    .filter(item => item.brandSimilarity >= 0.55 || (item.nameSimilarity >= 0.86 && item.score >= 0.76))
     .slice(0, 7);
+  const unknownBrandLowSignal = unknownBrandLikely && top.brandSimilarity < 0.5 && top.nameSimilarity < 0.86;
 
-  if (unknownBrandLikely && weakBrandSignal) {
+  if (unknownBrandLowSignal || (unknownBrandLikely && weakBrandSignal)) {
     if (!unknownBrandCandidates.length) {
       return { state: 'candidate_list', decisionReason: 'unknown_brand', autoResolved: false, candidates: [] };
     }
@@ -1589,13 +1752,13 @@ function parseProductCandidateFromHtml(text, url = '', fallbackQuery = '') {
 }
 
 function validateIngestionCandidate(candidate, query = '') {
-  if (!candidate) return { ok: false, reason: 'candidate_missing' };
-  if (!String(candidate.brand_canonical || '').trim()) return { ok: false, reason: 'missing_brand' };
-  if (!String(candidate.name_canonical || '').trim()) return { ok: false, reason: 'missing_name' };
-  if (looksGenericProductName(candidate.name_canonical)) return { ok: false, reason: 'generic_name' };
+  if (!candidate) return { ok: false, reason: 'parser_no_product' };
+  if (!String(candidate.brand_canonical || '').trim()) return { ok: false, reason: 'parser_no_brand' };
+  if (!String(candidate.name_canonical || '').trim()) return { ok: false, reason: 'parser_no_name' };
+  if (looksGenericProductName(candidate.name_canonical)) return { ok: false, reason: 'parser_no_name' };
   if (query) {
     const similarity = overlapScore(query, `${candidate.brand_canonical} ${candidate.name_canonical}`);
-    if (similarity < 0.28) return { ok: false, reason: 'weak_similarity' };
+    if (similarity < 0.28) return { ok: false, reason: 'low_similarity' };
   }
   return { ok: true };
 }
@@ -1617,6 +1780,9 @@ function queueSubmission(payload) {
   queue.items.push({
     jobId,
     state: 'queued',
+    attemptCount: 0,
+    lastAttemptAt: '',
+    failureCode: '',
     createdAt: now,
     updatedAt: now,
     processedAt: '',
@@ -1634,6 +1800,9 @@ function queueSubmission(payload) {
   jobs.items.push({
     jobId,
     state: 'queued',
+    attemptCount: 0,
+    lastAttemptAt: '',
+    failureCode: '',
     createdAt: now,
     updatedAt: now,
     productId: '',
@@ -1649,24 +1818,33 @@ async function candidateFromSubmission(submission) {
   const query = String(submission.query || '').trim();
   const productUrl = sanitizeUrl(submission.productUrl || '');
   const ingredientsText = normalizeIngredientText(submission.ingredientsText || '');
+  let failureCode = '';
 
   if (productUrl) {
-    const html = await fetchTextWithTimeout(productUrl, SOURCE_TIMEOUT_MS + 3500);
-    const parsed = parseProductCandidateFromHtml(html, productUrl, query);
-    if (parsed) {
-      if (ingredientsText) {
-        const quality = scoreIngredientCandidate(ingredientsText);
-        if (quality.valid) {
-          parsed.ingredients_text = ingredientsText;
-          parsed.ingredients_status = 'available';
-          parsed.ingredients_source = 'user_submitted_manual';
-          parsed.ingredients_last_verified_at = nowIso();
-          parsed.ingredients_version_hash = hashText(ingredientsText);
-          parsed.ingredients_confidence = Math.max(parsed.ingredients_confidence || 0, quality.confidence);
+    try {
+      const page = await fetchPublicPageWithGuards(productUrl, INGESTION_FETCH_BUDGET_MS);
+      const parsed = parseProductCandidateFromHtml(page.text, page.finalUrl, query);
+      if (parsed) {
+        if (ingredientsText) {
+          const quality = scoreIngredientCandidate(ingredientsText);
+          if (quality.valid) {
+            parsed.ingredients_text = ingredientsText;
+            parsed.ingredients_status = 'available';
+            parsed.ingredients_source = 'user_submitted_manual';
+            parsed.ingredients_last_verified_at = nowIso();
+            parsed.ingredients_version_hash = hashText(ingredientsText);
+            parsed.ingredients_confidence = Math.max(parsed.ingredients_confidence || 0, quality.confidence);
+          }
         }
+        return { candidate: parsed, source: 'url', failureCode: '' };
       }
-      return { candidate: parsed, source: 'url' };
+      failureCode = 'parser_no_product';
+    } catch (err) {
+      failureCode = normalizeIngestionFailureCode(err?.message, 'parser_no_product');
+      if (!query) return { candidate: null, source: 'url', failureCode };
     }
+  } else if (submission.productUrl && !productUrl && !query && !submission.barcode) {
+    return { candidate: null, source: 'url', failureCode: 'invalid_url' };
   }
 
   if (query) {
@@ -1703,11 +1881,12 @@ async function candidateFromSubmission(submission) {
           existing.ingredients_confidence = quality.confidence;
         }
       }
-      return { candidate: existing, source: 'resolver' };
+      return { candidate: existing, source: 'resolver', failureCode: '' };
     }
+    failureCode = failureCode || normalizeIngestionFailureCode(resolved.decisionReason === 'unknown_brand' ? 'low_similarity' : 'parser_no_product', 'parser_no_product');
   }
 
-  return { candidate: null, source: 'none' };
+  return { candidate: null, source: 'none', failureCode: failureCode || 'parser_no_product' };
 }
 
 async function processQueuedIngestionJobs() {
@@ -1720,25 +1899,48 @@ async function processQueuedIngestionJobs() {
       if (!next) break;
 
       next.state = 'processing';
+      next.attemptCount = Number(next.attemptCount || 0) + 1;
+      next.lastAttemptAt = nowIso();
+      next.failureCode = '';
+      next.reason = '';
       next.updatedAt = nowIso();
       writeAddProductQueue(queue);
-      updateIngestionJob(next.jobId, { state: 'processing' });
+      updateIngestionJob(next.jobId, {
+        state: 'processing',
+        attemptCount: next.attemptCount,
+        lastAttemptAt: next.lastAttemptAt,
+        failureCode: '',
+        reason: ''
+      });
 
       try {
         const outcome = await candidateFromSubmission(next.payload || {});
         const candidate = outcome.candidate;
         const validation = validateIngestionCandidate(candidate, normalizeText(next.payload?.query || ''));
         if (!validation.ok) {
+          const failureCode = normalizeIngestionFailureCode(outcome.failureCode || validation.reason, 'upsert_failed');
           next.state = 'failed';
+          next.failureCode = failureCode;
           next.reason = validation.reason;
           next.processedAt = nowIso();
           next.updatedAt = nowIso();
           writeAddProductQueue(queue);
-          updateIngestionJob(next.jobId, { state: 'failed', reason: validation.reason });
+          updateIngestionJob(next.jobId, {
+            state: 'failed',
+            reason: validation.reason,
+            failureCode,
+            attemptCount: next.attemptCount,
+            lastAttemptAt: next.lastAttemptAt
+          });
+          pushMetric('add_product_ingestion_failed', { jobId: next.jobId, reason: validation.reason, failureCode });
           continue;
         }
 
-        upsertCatalogProducts([candidate]);
+        try {
+          upsertCatalogProducts([candidate]);
+        } catch (_) {
+          throw new Error('upsert_failed');
+        }
         if (candidate.ingredients_status !== 'available') {
           scheduleIngredientResolution(
             candidate.product_id,
@@ -1752,10 +1954,18 @@ async function processQueuedIngestionJobs() {
         next.state = 'completed';
         next.productId = candidate.product_id;
         next.reason = '';
+        next.failureCode = '';
         next.processedAt = nowIso();
         next.updatedAt = nowIso();
         writeAddProductQueue(queue);
-        updateIngestionJob(next.jobId, { state: 'completed', productId: candidate.product_id, reason: '' });
+        updateIngestionJob(next.jobId, {
+          state: 'completed',
+          productId: candidate.product_id,
+          reason: '',
+          failureCode: '',
+          attemptCount: next.attemptCount,
+          lastAttemptAt: next.lastAttemptAt
+        });
         pushMetric('add_product_ingestion_completed', {
           jobId: next.jobId,
           productId: candidate.product_id,
@@ -1763,13 +1973,21 @@ async function processQueuedIngestionJobs() {
         });
       } catch (err) {
         const reason = String(err?.message || 'ingestion_failed').slice(0, 120);
+        const failureCode = normalizeIngestionFailureCode(reason, 'upsert_failed');
         next.state = 'failed';
         next.reason = reason;
+        next.failureCode = failureCode;
         next.processedAt = nowIso();
         next.updatedAt = nowIso();
         writeAddProductQueue(queue);
-        updateIngestionJob(next.jobId, { state: 'failed', reason });
-        pushMetric('add_product_ingestion_failed', { jobId: next.jobId, reason });
+        updateIngestionJob(next.jobId, {
+          state: 'failed',
+          reason,
+          failureCode,
+          attemptCount: next.attemptCount,
+          lastAttemptAt: next.lastAttemptAt
+        });
+        pushMetric('add_product_ingestion_failed', { jobId: next.jobId, reason, failureCode });
       }
     }
   } finally {
@@ -2386,6 +2604,7 @@ async function handleResolveProducts(req, res) {
   let result = await resolveProductWithFallback(query, region, locale);
   if (typeof result.autoResolved !== 'boolean') result.autoResolved = false;
   if (!result.decisionReason) result.decisionReason = 'ambiguous';
+  if (result.state === 'candidate_list' && !Array.isArray(result.candidates)) result.candidates = [];
 
   if (result.state === 'not_found') {
     const miss = upsertMiss(query, result.normalized_query, 'no_candidates', {
@@ -2583,6 +2802,7 @@ async function handleCandidateSelectionFeedback(req, res) {
 async function handleAddProductFeedback(req, res) {
   const body = await readBody(req);
   const query = String(body.query || '').trim();
+  const rawProductUrl = String(body.productUrl || '').trim();
   const productUrl = sanitizeUrl(body.productUrl || '');
   const barcode = String(body.barcode || '').trim();
   const ingredientsText = String(body.ingredientsText || '').trim();
@@ -2590,6 +2810,10 @@ async function handleAddProductFeedback(req, res) {
   const locale = String(body.locale || '').trim();
   const region = String(body.region || '').trim();
 
+  if (rawProductUrl && !productUrl) {
+    sendJson(res, 400, { error: 'invalid_url' });
+    return;
+  }
   if (!query && !productUrl && !barcode) {
     sendJson(res, 400, { error: 'query_or_productUrl_or_barcode_required' });
     return;
@@ -2612,7 +2836,12 @@ async function handleAddProductFeedback(req, res) {
     hasIngredientsText: !!ingredientsText
   });
   processQueuedIngestionJobs().catch(() => {});
-  sendJson(res, 202, { accepted: true, ingestionJobId });
+  sendJson(res, 202, {
+    accepted: true,
+    ingestionJobId,
+    state: 'queued',
+    estimatedWaitMs: INGESTION_ESTIMATED_JOB_MS
+  });
 }
 
 function handleIngestionStatus(_req, res, jobId) {
@@ -2627,6 +2856,10 @@ function handleIngestionStatus(_req, res, jobId) {
     state: job.state || 'queued',
     productId: job.productId || '',
     reason: job.reason || '',
+    failureCode: job.failureCode || '',
+    failureStage: job.failureCode || '',
+    attemptCount: Number(job.attemptCount || 0),
+    lastAttemptAt: job.lastAttemptAt || '',
     updatedAt: job.updatedAt || job.createdAt || '',
     source: job.source || ''
   });

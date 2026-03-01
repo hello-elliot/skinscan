@@ -784,9 +784,18 @@ function cacheSet(prefix, q, val) { if (val) _searchCache[cacheKey(prefix, q)] =
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // STATE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const PRIMARY_SKIN_TYPES = new Set(['normal', 'dry']);
+const CONDITION_SKIN_TYPES = new Set(['acne-prone', 'sensitive']);
+function normalizeSelectedSkinTypes(saved = []) {
+  const out = new Set(Array.isArray(saved) ? saved : []);
+  if (out.has('dry') && out.has('normal')) out.delete('normal');
+  if (!out.has('dry') && !out.has('normal')) out.add('normal');
+  return out;
+}
 // Restore skin type from localStorage if available
 const _savedTypes = (() => { try { return JSON.parse(localStorage.getItem('skinscan_skin_types') || '[]'); } catch(e) { return []; } })();
-const selectedTypes = new Set(_savedTypes);
+const selectedTypes = normalizeSelectedSkinTypes(_savedTypes);
+try { localStorage.setItem('skinscan_skin_types', JSON.stringify([...selectedTypes])); } catch(_) {}
 let activeSource = 'both';
 let selectedProduct = null;
 let capturedPhotoBase64 = null;   // base64 image data from camera
@@ -795,9 +804,11 @@ let autoReanalyzeTimer = null;
 let latestSuggestRequestId = 0;
 let searchState = 'idle';
 let lastSuggestionMeta = null;
+let addProductState = 'add_idle';
+let addProductPollToken = 0;
 const productInput = document.getElementById('productInput');
 
-// SearchState: 'idle' | 'searching' | 'results' | 'empty' | 'error'
+// SearchState: 'idle' | 'searching' | 'results' | 'empty' | 'error' | 'unknown_brand_no_candidates'
 function trackEvent(name, payload = {}) {
   const event = { name, payload, ts: new Date().toISOString() };
   window.__skinscanTelemetry = window.__skinscanTelemetry || [];
@@ -811,7 +822,7 @@ function hashString(s) {
 }
 function profileModeFromTypes(skinTypes) {
   if (!skinTypes.length) return 'none';
-  const targeted = skinTypes.some(t => t === 'acne-prone' || t === 'sensitive' || t === 'dry');
+  const targeted = skinTypes.some(t => CONDITION_SKIN_TYPES.has(t) || t === 'dry');
   return targeted ? 'targeted' : 'normal';
 }
 function setSearchState(nextState, options = {}) {
@@ -822,10 +833,14 @@ function setSearchState(nextState, options = {}) {
     return;
   }
   if (nextState === 'results') return;
-  hideAddProductCapture();
+  const addFlowBusy = addProductState === 'add_submitting' || addProductState === 'add_queued' || addProductState === 'add_processing';
+  const keepAddPanel = addFlowBusy || nextState === 'unknown_brand_no_candidates';
+  if (!keepAddPanel) hideAddProductCapture();
   suggestionsEl._products = [];
   const statusText = nextState === 'searching'
     ? 'Searching...'
+    : nextState === 'unknown_brand_no_candidates'
+      ? 'No close match yet. Add product URL below for fast indexing.'
     : nextState === 'empty'
       ? 'No matching product found. Try brand + full product name.'
       : 'Search temporarily unavailable. You can still paste ingredients.';
@@ -856,7 +871,25 @@ document.querySelectorAll('.chip').forEach(c => {
   if (selectedTypes.has(c.dataset.type)) c.classList.add('active');
   c.addEventListener('click', () => {
     const t = c.dataset.type;
-    selectedTypes.has(t) ? (selectedTypes.delete(t), c.classList.remove('active')) : (selectedTypes.add(t), c.classList.add('active'));
+    if (PRIMARY_SKIN_TYPES.has(t)) {
+      if (t === 'dry') {
+        if (selectedTypes.has('dry')) selectedTypes.delete('dry');
+        else selectedTypes.add('dry');
+        selectedTypes.delete('normal');
+      } else if (t === 'normal') {
+        selectedTypes.add('normal');
+        selectedTypes.delete('dry');
+      }
+      if (!selectedTypes.has('dry') && !selectedTypes.has('normal')) selectedTypes.add('normal');
+    } else if (CONDITION_SKIN_TYPES.has(t)) {
+      selectedTypes.has(t) ? selectedTypes.delete(t) : selectedTypes.add(t);
+    } else {
+      selectedTypes.has(t) ? selectedTypes.delete(t) : selectedTypes.add(t);
+    }
+    document.querySelectorAll('.chip').forEach(chip => {
+      const key = chip.dataset.type;
+      chip.classList.toggle('active', selectedTypes.has(key));
+    });
     try { localStorage.setItem('skinscan_skin_types', JSON.stringify([...selectedTypes])); } catch(e) {}
     trackEvent('skin_profile_changed', { selected: [...selectedTypes], profileMode: profileModeFromTypes([...selectedTypes]) });
     scheduleAutoReanalysis();
@@ -1099,19 +1132,65 @@ productInput.addEventListener('keydown', e => {
   }
 });
 document.addEventListener('click', e => {
-  if (!e.target.closest('#productInput') && !e.target.closest('#suggestions')) hideSuggestions();
+  if (!e.target.closest('#productInput') && !e.target.closest('#suggestions') && !e.target.closest('#addProductPanel')) hideSuggestions({ keepAddProductPanel: true });
 });
-function hideSuggestions() {
+function hideSuggestions(options = {}) {
+  const keepAddProductPanel = !!options.keepAddProductPanel;
   searchState = 'idle';
   suggestionsEl.classList.remove('show');
   suggestionsEl.innerHTML = '';
   suggestionsEl._products = [];
   lastSuggestionMeta = null;
-  lastAddProductMeta = null;
-  if (addProductPanelEl) {
+  if (!keepAddProductPanel) {
+    lastAddProductMeta = null;
+    addProductState = 'add_idle';
+    addProductPollToken += 1;
+  }
+  if (addProductPanelEl && !keepAddProductPanel) {
     addProductPanelEl.classList.remove('show');
     addProductPanelEl.innerHTML = '';
   }
+}
+if (addProductPanelEl) {
+  addProductPanelEl.addEventListener('click', e => e.stopPropagation());
+}
+
+function addProductStatusCopy(state, failureCode = '') {
+  if (state === 'add_submitting') return 'Submitting…';
+  if (state === 'add_queued') return 'Submitted. Waiting in queue…';
+  if (state === 'add_processing') return 'Indexing in progress…';
+  if (state === 'add_completed') return 'Indexed. Refreshing suggestions…';
+  if (state === 'add_failed') {
+    const map = {
+      invalid_url: 'Invalid URL. Use a full http/https product page URL.',
+      blocked_host: 'This URL host is blocked for safety. Try a public product page.',
+      fetch_timeout: 'Fetching timed out. Try another product URL.',
+      parser_no_product: 'Could not parse a product from that page yet.',
+      parser_no_brand: 'Product page found, but brand was missing.',
+      parser_no_name: 'Product page found, but product name was missing.',
+      low_similarity: 'That page did not match your query closely enough.',
+      upsert_failed: 'Could not save this product right now. Try again.'
+    };
+    return map[failureCode] || 'Indexing failed for now. You can still paste ingredients and analyze.';
+  }
+  return '';
+}
+
+function updateAddProductUi(state, options = {}) {
+  addProductState = state;
+  const statusEl = document.getElementById('addProductStatus');
+  const submitBtn = document.getElementById('addProductSubmitBtn');
+  const urlEl = document.getElementById('addProductUrl');
+  const ingredientsEl = document.getElementById('addProductIngredients');
+  if (!statusEl || !submitBtn) return;
+  const failureCode = options.failureCode || '';
+  const customText = options.text || '';
+  statusEl.textContent = customText || addProductStatusCopy(state, failureCode);
+  submitBtn.textContent = state === 'add_failed' ? 'Retry indexing' : 'Submit for indexing';
+  const lockInputs = state === 'add_submitting' || state === 'add_queued' || state === 'add_processing';
+  submitBtn.disabled = lockInputs;
+  if (urlEl) urlEl.disabled = lockInputs;
+  if (ingredientsEl) ingredientsEl.disabled = lockInputs;
 }
 
 function showAddProductCapture(meta = {}) {
@@ -1130,16 +1209,19 @@ function showAddProductCapture(meta = {}) {
     <input id="addProductUrl" class="add-product-input" placeholder="https://brand.com/product-page or retailer URL">
     <textarea id="addProductIngredients" class="add-product-textarea" placeholder="Optional: paste ingredient list"></textarea>
     <div class="add-product-actions">
-      <button class="add-product-btn" onclick="submitAddProduct()">Submit for indexing</button>
+      <button id="addProductSubmitBtn" class="add-product-btn" onclick="submitAddProduct()">Submit for indexing</button>
       <button class="add-product-btn alt" onclick="hideAddProductCapture()">Hide</button>
     </div>
     <div class="add-product-status" id="addProductStatus"></div>
   `;
   addProductPanelEl.classList.add('show');
+  updateAddProductUi('add_idle');
 }
 
 function hideAddProductCapture() {
   lastAddProductMeta = null;
+  addProductState = 'add_idle';
+  addProductPollToken += 1;
   if (!addProductPanelEl) return;
   addProductPanelEl.classList.remove('show');
   addProductPanelEl.innerHTML = '';
@@ -1152,28 +1234,31 @@ function showCandidateStatusMessage(text) {
 }
 
 async function pollIngestionJob(jobId, query) {
+  const token = ++addProductPollToken;
   const startedAt = Date.now();
   while (Date.now() - startedAt <= 18000) {
     await new Promise(resolve => setTimeout(resolve, 2000));
+    if (token !== addProductPollToken) return null;
     try {
       const res = await fetch(resolverUrl(`/resolver/ingestion-status/${encodeURIComponent(jobId)}`));
       if (!res.ok) continue;
       const data = await res.json();
+      if (data.state === 'queued') updateAddProductUi('add_queued');
+      if (data.state === 'processing') updateAddProductUi('add_processing');
       if (data.state === 'completed') {
-        const statusEl = document.getElementById('addProductStatus');
-        if (statusEl) statusEl.textContent = 'Indexed. Refreshing suggestions...';
+        updateAddProductUi('add_completed');
         if (query) triggerSuggest(query);
         trackEvent('add_product_ingestion_completed', { ingestionJobId: jobId, productId: data.productId || '' });
         return data;
       }
       if (data.state === 'failed') {
-        const statusEl = document.getElementById('addProductStatus');
-        if (statusEl) statusEl.textContent = 'Indexing failed for now. You can still paste ingredients and analyze.';
-        trackEvent('add_product_ingestion_failed', { ingestionJobId: jobId, reason: data.reason || '' });
+        updateAddProductUi('add_failed', { failureCode: data.failureCode || '' });
+        trackEvent('add_product_ingestion_failed', { ingestionJobId: jobId, reason: data.reason || '', failureCode: data.failureCode || '' });
         return data;
       }
     } catch (_) {}
   }
+  updateAddProductUi('add_failed', { failureCode: 'fetch_timeout' });
   return null;
 }
 
@@ -1181,14 +1266,13 @@ async function submitAddProduct() {
   if (!lastAddProductMeta) return;
   const urlEl = document.getElementById('addProductUrl');
   const ingredientsEl = document.getElementById('addProductIngredients');
-  const statusEl = document.getElementById('addProductStatus');
   const productUrl = (urlEl?.value || '').trim();
   const ingredientsText = (ingredientsEl?.value || '').trim();
   if (!productUrl && !ingredientsText) {
-    if (statusEl) statusEl.textContent = 'Add a product URL or paste ingredients.';
+    updateAddProductUi('add_failed', { text: 'Add a product URL or paste ingredients.' });
     return;
   }
-  if (statusEl) statusEl.textContent = 'Submitting...';
+  updateAddProductUi('add_submitting');
   try {
     const res = await fetch(resolverUrl('/resolver/feedback/add-product'), {
       method: 'POST',
@@ -1203,15 +1287,19 @@ async function submitAddProduct() {
     });
     const data = res.ok ? await res.json() : {};
     if (!res.ok || !data.accepted || !data.ingestionJobId) {
-      if (statusEl) statusEl.textContent = 'Could not submit right now. Try again in a moment.';
+      updateAddProductUi('add_failed', { text: 'Could not submit right now. Try again in a moment.' });
       trackEvent('add_product_submission_failed', { query: lastAddProductMeta.query });
       return;
     }
-    if (statusEl) statusEl.textContent = 'Submitted. Indexing in background...';
+    updateAddProductUi('add_queued', {
+      text: data.estimatedWaitMs
+        ? `Submitted. Estimated wait ~${Math.max(1, Math.round(Number(data.estimatedWaitMs) / 1000))}s.`
+        : ''
+    });
     trackEvent('add_product_submission_sent', { query: lastAddProductMeta.query, ingestionJobId: data.ingestionJobId });
     pollIngestionJob(data.ingestionJobId, lastAddProductMeta.query);
   } catch (_) {
-    if (statusEl) statusEl.textContent = 'Could not submit right now. Try again in a moment.';
+    updateAddProductUi('add_failed', { text: 'Could not submit right now. Try again in a moment.' });
   }
 }
 async function triggerSuggest(query) {
@@ -1245,6 +1333,30 @@ async function triggerSuggest(query) {
     trackEvent('product_confirmation_shown', { query, confidence: 'medium', decisionReason: resolution.decisionReason || '' });
     return;
   }
+  const unknownBrandCandidates = (resolution.candidates || []).filter(c => Number(c.brandSimilarity || 0) >= 0.55 || Number(c.nameSimilarity || 0) >= 0.86);
+  if (resolution.state === 'candidate_list' && resolution.decisionReason === 'unknown_brand') {
+    if (unknownBrandCandidates.length) {
+      showSuggestions(unknownBrandCandidates.slice(0, 7), {
+        confirmMode: false,
+        meta: {
+          query,
+          normalizedQuery: resolution.normalizedQuery || normalizeQuery(query),
+          selectionContext: 'suggestions',
+          decisionReason: resolution.decisionReason || ''
+        }
+      });
+      setSearchState('results', { query });
+      return;
+    }
+    showCandidateStatusMessage('No close match yet. Add a product URL below for fast indexing.');
+    showAddProductCapture({
+      query,
+      normalizedQuery: resolution.normalizedQuery || normalizeQuery(query),
+      decisionReason: 'unknown_brand'
+    });
+    setSearchState('unknown_brand_no_candidates', { query });
+    return;
+  }
   if (resolution.state === 'candidate_list' && resolution.candidates?.length) {
     showSuggestions(resolution.candidates.slice(0, 7), {
       confirmMode: false,
@@ -1254,16 +1366,6 @@ async function triggerSuggest(query) {
         selectionContext: 'suggestions',
         decisionReason: resolution.decisionReason || ''
       }
-    });
-    setSearchState('results', { query });
-    return;
-  }
-  if (resolution.state === 'candidate_list' && resolution.decisionReason === 'unknown_brand') {
-    showCandidateStatusMessage('No close match yet. Add a product URL below for fast indexing.');
-    showAddProductCapture({
-      query,
-      normalizedQuery: resolution.normalizedQuery || normalizeQuery(query),
-      decisionReason: 'unknown_brand'
     });
     setSearchState('results', { query });
     return;
@@ -2208,8 +2310,19 @@ async function doScan() {
     if (resolution.state === 'candidate_list') {
       document.getElementById('loading').classList.remove('show');
       document.getElementById('inputSection').style.display = '';
-      if (resolution.candidates?.length) {
-        showSuggestions(resolution.candidates || [], {
+      const unknownBrandCandidates = (resolution.candidates || []).filter(c => Number(c.brandSimilarity || 0) >= 0.55 || Number(c.nameSimilarity || 0) >= 0.86);
+      if (resolution.decisionReason === 'unknown_brand' && !unknownBrandCandidates.length) {
+        showCandidateStatusMessage('No close match yet. Add a product URL below for fast indexing.');
+        showAddProductCapture({
+          query: inputVal,
+          normalizedQuery: resolution.normalizedQuery || normalizeQuery(inputVal),
+          decisionReason: 'unknown_brand'
+        });
+      } else if (resolution.candidates?.length) {
+        const renderedCandidates = resolution.decisionReason === 'unknown_brand'
+          ? unknownBrandCandidates
+          : (resolution.candidates || []);
+        showSuggestions(renderedCandidates, {
           confirmMode: false,
           meta: {
             query: inputVal,
@@ -2217,13 +2330,6 @@ async function doScan() {
             selectionContext: 'search',
             decisionReason: resolution.decisionReason || ''
           }
-        });
-      } else if (resolution.decisionReason === 'unknown_brand') {
-        showCandidateStatusMessage('No close match yet. Add a product URL below for fast indexing.');
-        showAddProductCapture({
-          query: inputVal,
-          normalizedQuery: resolution.normalizedQuery || normalizeQuery(inputVal),
-          decisionReason: 'unknown_brand'
         });
       } else {
         setSearchState('empty', { query: inputVal });
