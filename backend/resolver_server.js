@@ -1751,6 +1751,67 @@ function parseProductCandidateFromHtml(text, url = '', fallbackQuery = '') {
   });
 }
 
+const PRODUCT_CUE_TOKENS = new Set([
+  'serum', 'cream', 'cleanser', 'essence', 'toner', 'moisturizer', 'moisturiser',
+  'lotion', 'mask', 'balm', 'oil', 'ampoule', 'emulsion', 'gel', 'sunscreen',
+  'sun', 'spf', 'wash', 'mist', 'peel', 'exfoliant', 'treatment'
+]);
+
+function titleCaseWords(value) {
+  return String(value || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function inferCandidateFromQuery(query, productUrl = '', ingredientsText = '') {
+  const normalized = normalizeText(query);
+  const tokens = tokenize(normalized);
+  if (tokens.length < 2) return null;
+
+  let brandTokenCount = 2;
+  if (tokens[1] === 'of' && tokens.length >= 3) brandTokenCount = 3;
+  if (tokens[0] === 'dr' && tokens.length >= 2) brandTokenCount = 2;
+
+  const cueIdx = tokens.findIndex((token, idx) => idx > 0 && PRODUCT_CUE_TOKENS.has(token));
+  if (cueIdx > 0) {
+    brandTokenCount = Math.max(1, Math.min(4, cueIdx));
+  } else {
+    brandTokenCount = Math.max(1, Math.min(brandTokenCount, Math.max(1, tokens.length - 1)));
+  }
+
+  const brandTokens = tokens.slice(0, brandTokenCount);
+  const nameTokens = tokens.slice(brandTokenCount);
+  if (!brandTokens.length || !nameTokens.length) return null;
+
+  const brand = cleanDisplayText(titleCaseWords(brandTokens.join(' ')), 80);
+  const name = cleanDisplayText(titleCaseWords(nameTokens.join(' ')), 180);
+  if (!brand || !name || looksGenericProductName(name)) return null;
+
+  const normalizedIngredients = normalizeIngredientText(ingredientsText);
+  const quality = scoreIngredientCandidate(normalizedIngredients);
+  return asCatalogProduct({
+    product_id: slugifyProductId(brand, name),
+    brand_canonical: brand,
+    name_canonical: name,
+    name_aliases: [normalizeText(name), normalizeText(query)],
+    brand_aliases: [normalizeText(brand)],
+    line: '',
+    category: '',
+    image_url: '',
+    ingredients_status: quality.valid ? 'available' : 'missing',
+    ingredients_text: quality.valid ? normalizedIngredients : '',
+    ingredients_source: quality.valid ? 'user_submitted_manual' : '',
+    ingredients_last_verified_at: quality.valid ? nowIso() : '',
+    ingredients_version_hash: quality.valid ? hashText(normalizedIngredients) : '',
+    ingredients_confidence: quality.valid ? quality.confidence : 0,
+    source_priority: quality.valid ? 80 : 70,
+    confidence_metadata: { quality: quality.valid ? 'medium' : 'low', freshness: 'daily', updated_at: nowIso(), popularity: 0.2 },
+    source_urls: productUrl ? [productUrl] : []
+  });
+}
+
 function validateIngestionCandidate(candidate, query = '') {
   if (!candidate) return { ok: false, reason: 'parser_no_product' };
   if (!String(candidate.brand_canonical || '').trim()) return { ok: false, reason: 'parser_no_brand' };
@@ -1842,6 +1903,13 @@ async function candidateFromSubmission(submission) {
     } catch (err) {
       failureCode = normalizeIngestionFailureCode(err?.message, 'parser_no_product');
       if (!query) return { candidate: null, source: 'url', failureCode };
+    }
+
+    if (query && ['fetch_timeout', 'low_similarity', 'parser_no_product', 'blocked_host'].includes(failureCode)) {
+      const provisional = inferCandidateFromQuery(query, productUrl, ingredientsText);
+      if (provisional) {
+        return { candidate: provisional, source: 'query_provisional', failureCode: '' };
+      }
     }
   } else if (submission.productUrl && !productUrl && !query && !submission.barcode) {
     return { candidate: null, source: 'url', failureCode: 'invalid_url' };
