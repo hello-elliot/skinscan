@@ -1209,8 +1209,8 @@ function showAddProductCapture(meta = {}) {
     <input id="addProductUrl" class="add-product-input" placeholder="https://brand.com/product-page or retailer URL">
     <textarea id="addProductIngredients" class="add-product-textarea" placeholder="Optional: paste ingredient list"></textarea>
     <div class="add-product-actions">
-      <button id="addProductSubmitBtn" class="add-product-btn" onclick="submitAddProduct()">Submit for indexing</button>
-      <button class="add-product-btn alt" onclick="hideAddProductCapture()">Hide</button>
+      <button type="button" id="addProductSubmitBtn" class="add-product-btn" onclick="submitAddProduct()">Submit for indexing</button>
+      <button type="button" class="add-product-btn alt" onclick="hideAddProductCapture()">Hide</button>
     </div>
     <div class="add-product-status" id="addProductStatus"></div>
   `;
@@ -2258,6 +2258,8 @@ function isPastedIngredientList(text) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async function doScan() {
   const inputVal = productInput.value.trim();
+  clearTimeout(searchTimeout);
+  latestSuggestRequestId += 1;
 
   // ── Path A: Photo mode ──
   if (capturedPhotoBase64) {
@@ -3024,46 +3026,21 @@ function escHtml(s) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// SERVICE WORKER REGISTRATION
+// SERVICE WORKER CLEANUP (avoid stale cached shells across deploys)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 if ('serviceWorker' in navigator) {
-  // Inline service worker as a blob — no separate sw.js file needed
-  const swCode = `
-    const CACHE = 'skinscan-v1';
-    const SHELL = ['./'];
-    self.addEventListener('install', e => {
-      e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
-      self.skipWaiting();
-    });
-    self.addEventListener('activate', e => {
-      e.waitUntil(caches.keys().then(keys =>
-        Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
-      ));
-      self.clients.claim();
-    });
-    self.addEventListener('fetch', e => {
-      // Only cache same-origin requests; pass API calls through
-      const url = new URL(e.request.url);
-      if (url.hostname === 'api.anthropic.com' ||
-          url.hostname === 'world.openbeautyfacts.org' ||
-          url.hostname === 'fonts.googleapis.com' ||
-          url.hostname === 'fonts.gstatic.com') {
-        return; // network-only for API/font calls
-      }
-      e.respondWith(
-        caches.match(e.request).then(cached => cached || fetch(e.request).then(resp => {
-          const clone = resp.clone();
-          caches.open(CACHE).then(c => c.put(e.request, clone));
-          return resp;
-        }))
-      );
-    });
-  `;
-  const blob = new Blob([swCode], { type: 'application/javascript' });
-  const swUrl = URL.createObjectURL(blob);
-  navigator.serviceWorker.register(swUrl, { scope: './' })
-    .then(() => console.log('SkinScan SW registered'))
-    .catch(e => console.log('SW registration skipped:', e.message));
+  navigator.serviceWorker.getRegistrations()
+    .then(regs => Promise.all(regs.map(reg => reg.unregister())))
+    .catch(() => {});
+}
+if ('caches' in window) {
+  caches.keys()
+    .then(keys => Promise.all(
+      keys
+        .filter(key => String(key).toLowerCase().includes('skinscan'))
+        .map(key => caches.delete(key))
+    ))
+    .catch(() => {});
 }
 </script>
 </body>
