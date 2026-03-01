@@ -1233,7 +1233,59 @@ function showCandidateStatusMessage(text) {
   suggestionsEl.classList.add('show');
 }
 
-async function pollIngestionJob(jobId, query) {
+async function resolveIngestedProduct(query, productId) {
+  if (!query || !productId) return null;
+  const resolution = await resolveProductFromBackend(query);
+  if (!resolution) return null;
+  if (resolution.product?.productId === productId) return resolution.product;
+  if (Array.isArray(resolution.candidates)) {
+    const hit = resolution.candidates.find(c => c?.productId === productId);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+async function autoAnalyzeIngestedProduct({ query, productId, submittedIngredients = '' }) {
+  let resolvedProduct = await resolveIngestedProduct(query, productId);
+  let ingredientsText = String(resolvedProduct?.ingredientsText || '').trim();
+  let analysisSource = 'resolver';
+
+  if (!ingredientsText && productId) {
+    try {
+      const res = await fetch(resolverUrl(`/resolver/products/${encodeURIComponent(productId)}/ingredients-status`));
+      if (res.ok) {
+        const status = await res.json();
+        ingredientsText = String(status.ingredientsText || '').trim();
+      }
+    } catch (_) {}
+  }
+
+  if (!ingredientsText && submittedIngredients.trim()) {
+    ingredientsText = submittedIngredients.trim();
+    analysisSource = 'user_submitted_manual';
+  }
+  if (!ingredientsText) return false;
+
+  hideSuggestions();
+  hideAddProductCapture();
+  document.getElementById('inputSection').style.display = 'none';
+  document.getElementById('loading').classList.add('show');
+  document.getElementById('results').classList.remove('show');
+  document.getElementById('results').innerHTML = '';
+  setLoading('Analyzing ingredients…', 'Using submitted product data');
+
+  await runAnalysis(
+    resolvedProduct?.name || query || 'Custom Product',
+    resolvedProduct?.brand || '',
+    ingredientsText,
+    analysisSource,
+    resolvedProduct?.img || '',
+    resolvedProduct?.category || ''
+  );
+  return true;
+}
+
+async function pollIngestionJob(jobId, query, submittedIngredients = '') {
   const token = ++addProductPollToken;
   const startedAt = Date.now();
   while (Date.now() - startedAt <= 18000) {
@@ -1247,7 +1299,12 @@ async function pollIngestionJob(jobId, query) {
       if (data.state === 'processing') updateAddProductUi('add_processing');
       if (data.state === 'completed') {
         updateAddProductUi('add_completed');
-        if (query) triggerSuggest(query);
+        const autoAnalyzed = await autoAnalyzeIngestedProduct({
+          query,
+          productId: data.productId || '',
+          submittedIngredients
+        });
+        if (!autoAnalyzed && query) triggerSuggest(query);
         trackEvent('add_product_ingestion_completed', { ingestionJobId: jobId, productId: data.productId || '' });
         return data;
       }
@@ -1297,7 +1354,7 @@ async function submitAddProduct() {
         : ''
     });
     trackEvent('add_product_submission_sent', { query: lastAddProductMeta.query, ingestionJobId: data.ingestionJobId });
-    pollIngestionJob(data.ingestionJobId, lastAddProductMeta.query);
+    pollIngestionJob(data.ingestionJobId, lastAddProductMeta.query, ingredientsText);
   } catch (_) {
     updateAddProductUi('add_failed', { text: 'Could not submit right now. Try again in a moment.' });
   }
