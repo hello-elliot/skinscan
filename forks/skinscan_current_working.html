@@ -2032,10 +2032,7 @@ function showSuggestions(products, options = {}) {
     shownCandidateProductIds: normalized.map(p => p.productId).filter(Boolean).slice(0, 10)
   };
   suggestionsEl.innerHTML = normalized.map((p, i) => {
-    const confidenceLabel = (p.confidence === 'high')
-      ? 'Best match'
-      : (p.confidence === 'medium' ? 'Possible match' : 'Maybe match');
-    const badgeText = confirmMode && i === 0 ? 'Confirm this product?' : confidenceLabel;
+    const badgeText = confirmMode && i === 0 ? 'Confirm this product?' : '';
     const badgeTone = confirmMode && i === 0 ? 'inci' : (p.confidence === 'high' ? 'obf' : 'inci');
     return `
       <div class="sug-item" onclick="pickProduct(${i})">
@@ -2044,7 +2041,7 @@ function showSuggestions(products, options = {}) {
           <div class="sug-name">${escHtml([p.brand, p.name].filter(Boolean).join(' — ') || p.name || p.brand || 'Product')}</div>
           ${p.category ? `<div class="sug-brand">${escHtml(p.category)}</div>` : ''}
         </div>
-        <span class="sug-badge ${badgeTone}">${badgeText}</span>
+        ${badgeText ? `<span class="sug-badge ${badgeTone}">${badgeText}</span>` : ''}
       </div>`;
   }).join('');
   suggestionsEl.classList.add('show');

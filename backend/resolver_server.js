@@ -2026,6 +2026,20 @@ function extractIngredientBlockFromHtml(text, sourceUrl = '') {
         if (quality.valid) return { ingredientsText: candidate, confidence: quality.confidence };
       }
     }
+
+    // Reliable fallback for INCI product pages: "ingredients explained" links.
+    const linkedIngredientNames = [
+      ...String(text).matchAll(/href=["']\/ingredients\/[^"']+["'][^>]*>([^<]{2,180})</gi)
+    ]
+      .map(m => decodeHtmlEntities(m[1]).replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .filter(v => !/^(read more|show all|details?)$/i.test(v));
+    if (linkedIngredientNames.length >= 4) {
+      const dedup = [...new Set(linkedIngredientNames)];
+      const candidate = normalizeIngredientText(dedup.join(', '));
+      const quality = scoreIngredientCandidate(candidate);
+      if (quality.valid) return { ingredientsText: candidate, confidence: quality.confidence };
+    }
   }
 
   const jsonLikePatterns = [
