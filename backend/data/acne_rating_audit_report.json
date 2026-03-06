@@ -1,0 +1,57 @@
+{
+  "generatedAt": "2026-03-06T20:08:36.872Z",
+  "totalIngredients": 2259,
+  "acneDistribution": {
+    "0": 1760,
+    "1": 162,
+    "2": 210,
+    "3": 86,
+    "4": 35,
+    "5": 6
+  },
+  "suspiciousCount": 6,
+  "suspicious": [
+    {
+      "name": "HEPTAPEPTIDE-15 PALMITATE",
+      "acne": 0,
+      "func": "peptide",
+      "bucket": "palmitate_esters",
+      "recommendation": "review_raise_to_2_if_acne-prone evidence supports"
+    },
+    {
+      "name": "PEG-10 LAURATE",
+      "acne": 0,
+      "func": "surfactant",
+      "bucket": "laurate_esters",
+      "recommendation": "review_raise_to_2_if_acne-prone evidence supports"
+    },
+    {
+      "name": "POTASSIUM LAURATE",
+      "acne": 0,
+      "func": "surfactant/soap",
+      "bucket": "laurate_esters",
+      "recommendation": "review_raise_to_2_if_acne-prone evidence supports"
+    },
+    {
+      "name": "POTASSIUM STEARATE",
+      "acne": 1,
+      "func": "soap/emulsifier",
+      "bucket": "stearate_esters",
+      "recommendation": "review_raise_to_2_if_acne-prone evidence supports"
+    },
+    {
+      "name": "SODIUM STEARATE",
+      "acne": 1,
+      "func": "soap/emulsifier",
+      "bucket": "stearate_esters",
+      "recommendation": "review_raise_to_2_if_acne-prone evidence supports"
+    },
+    {
+      "name": "TRIETHANOLAMINE STEARATE",
+      "acne": 1,
+      "func": "emulsifier",
+      "bucket": "stearate_esters",
+      "recommendation": "review_raise_to_2_if_acne-prone evidence supports"
+    }
+  ]
+}

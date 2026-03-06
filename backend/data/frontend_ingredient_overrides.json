@@ -199,6 +199,126 @@
       "al": 0,
       "safe": true,
       "func": "skin conditioning/lipid"
+    },
+    "SHEA BUTTER": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient/occlusive"
+    },
+    "GLYCERYL STEARATE CITRATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "GLYCERYL STEARATE SE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "PEG-100 STEARATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "POLYGLYCERYL-4 STEARATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "POLYGLYCERYL-10 STEARATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "POLYGLYCERYL-10 OLEATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "POLYGLYCERYL-10 MYRISTATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "POLYGLYCERYL-10 LAURATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "POLYGLYCERYL-4 LAURATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "POLYGLYCERYL-3 LACTYLATE/LAURATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "ISOAMYL LAURATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient"
+    },
+    "DEXTRIN PALMITATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "wax"
+    },
+    "COFFEE BUTTER": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient"
+    },
+    "COFFEA ARABICA SEED BUTTER": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient"
     }
   },
   "aliases": {
@@ -221,7 +341,7 @@
     "GLYCERYL OLEATE": "GLYCERYL OLEATE",
     "BUTYROSPERMUM PARKII BUTTER": "BUTYROSPERMUM PARKII BUTTER",
     "BUTYROSPERMUM PARKII (SHEA) BUTTER": "BUTYROSPERMUM PARKII BUTTER",
-    "SHEA BUTTER": "BUTYROSPERMUM PARKII BUTTER",
+    "SHEA BUTTER": "SHEA BUTTER",
     "C12-16 ALCOHOLS": "C12-16 ALCOHOLS",
     "SODIUM ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": "SODIUM ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER",
     "MALTODEXTRIN": "MALTODEXTRIN",
@@ -240,7 +360,21 @@
     "ROSMARINUS OFFICINALIS WATER": "ROSMARINUS OFFICINALIS (ROSEMARY) WATER",
     "ROSMARINUS OFFICINALIS ROSEMARY WATER": "ROSMARINUS OFFICINALIS (ROSEMARY) WATER",
     "ROSMARINUS OFFICINALIS LEAF WATER": "ROSMARINUS OFFICINALIS (ROSEMARY) WATER",
-    "GLYECRIN": "GLYCERIN"
+    "GLYECRIN": "GLYCERIN",
+    "GLYCERYL STEARATE CITRATE": "GLYCERYL STEARATE CITRATE",
+    "GLYCERYL STEARATE SE": "GLYCERYL STEARATE SE",
+    "PEG-100 STEARATE": "PEG-100 STEARATE",
+    "POLYGLYCERYL-4 STEARATE": "POLYGLYCERYL-4 STEARATE",
+    "POLYGLYCERYL-10 STEARATE": "POLYGLYCERYL-10 STEARATE",
+    "POLYGLYCERYL-10 OLEATE": "POLYGLYCERYL-10 OLEATE",
+    "POLYGLYCERYL-10 MYRISTATE": "POLYGLYCERYL-10 MYRISTATE",
+    "POLYGLYCERYL-10 LAURATE": "POLYGLYCERYL-10 LAURATE",
+    "POLYGLYCERYL-4 LAURATE": "POLYGLYCERYL-4 LAURATE",
+    "POLYGLYCERYL-3 LACTYLATE/LAURATE": "POLYGLYCERYL-3 LACTYLATE/LAURATE",
+    "ISOAMYL LAURATE": "ISOAMYL LAURATE",
+    "DEXTRIN PALMITATE": "DEXTRIN PALMITATE",
+    "COFFEE BUTTER": "COFFEE BUTTER",
+    "COFFEA ARABICA SEED BUTTER": "COFFEA ARABICA SEED BUTTER"
   },
   "synonyms": {
     "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
@@ -262,7 +396,7 @@
     "GLYCERYL OLEATE": "GLYCERYL OLEATE",
     "BUTYROSPERMUM PARKII BUTTER": "BUTYROSPERMUM PARKII BUTTER",
     "BUTYROSPERMUM PARKII (SHEA) BUTTER": "BUTYROSPERMUM PARKII BUTTER",
-    "SHEA BUTTER": "BUTYROSPERMUM PARKII BUTTER",
+    "SHEA BUTTER": "SHEA BUTTER",
     "C12-16 ALCOHOLS": "C12-16 ALCOHOLS",
     "SODIUM ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": "SODIUM ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER",
     "MALTODEXTRIN": "MALTODEXTRIN",
@@ -281,7 +415,21 @@
     "ROSMARINUS OFFICINALIS WATER": "ROSMARINUS OFFICINALIS (ROSEMARY) WATER",
     "ROSMARINUS OFFICINALIS ROSEMARY WATER": "ROSMARINUS OFFICINALIS (ROSEMARY) WATER",
     "ROSMARINUS OFFICINALIS LEAF WATER": "ROSMARINUS OFFICINALIS (ROSEMARY) WATER",
-    "GLYECRIN": "GLYCERIN"
+    "GLYECRIN": "GLYCERIN",
+    "GLYCERYL STEARATE CITRATE": "GLYCERYL STEARATE CITRATE",
+    "GLYCERYL STEARATE SE": "GLYCERYL STEARATE SE",
+    "PEG-100 STEARATE": "PEG-100 STEARATE",
+    "POLYGLYCERYL-4 STEARATE": "POLYGLYCERYL-4 STEARATE",
+    "POLYGLYCERYL-10 STEARATE": "POLYGLYCERYL-10 STEARATE",
+    "POLYGLYCERYL-10 OLEATE": "POLYGLYCERYL-10 OLEATE",
+    "POLYGLYCERYL-10 MYRISTATE": "POLYGLYCERYL-10 MYRISTATE",
+    "POLYGLYCERYL-10 LAURATE": "POLYGLYCERYL-10 LAURATE",
+    "POLYGLYCERYL-4 LAURATE": "POLYGLYCERYL-4 LAURATE",
+    "POLYGLYCERYL-3 LACTYLATE/LAURATE": "POLYGLYCERYL-3 LACTYLATE/LAURATE",
+    "ISOAMYL LAURATE": "ISOAMYL LAURATE",
+    "DEXTRIN PALMITATE": "DEXTRIN PALMITATE",
+    "COFFEE BUTTER": "COFFEE BUTTER",
+    "COFFEA ARABICA SEED BUTTER": "COFFEA ARABICA SEED BUTTER"
   },
   "familyRules": []
 }
