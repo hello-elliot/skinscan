@@ -1499,10 +1499,16 @@ async function resolveProductWithFallback(query, region, locale) {
   let result = resolveAgainstCatalog(query, region, locale);
   if (result.state === 'resolved_high') return result;
 
+  // Keep search responsiveness high: only do live connector recall for clearly weak/no-signal cases.
   let connectorCandidates = [];
   const topScore = result.product?.score || result.candidates?.[0]?.score || 0;
   const lowTrustDecision = ['unknown_brand', 'brand_mismatch'].includes(result.decisionReason);
-  if (result.state === 'not_found' || topScore < 0.72 || lowTrustDecision) {
+  const shouldLiveFetch = (
+    result.state === 'not_found'
+    || (result.state === 'candidate_list' && lowTrustDecision)
+    || (result.state === 'candidate_list' && topScore < 0.62)
+  );
+  if (shouldLiveFetch) {
     connectorCandidates = await fetchCandidatesFromConnectors(result.normalized_query || query);
     if (connectorCandidates.length) {
       upsertCatalogProducts(connectorCandidates);
@@ -1530,7 +1536,14 @@ async function fetchJsonWithTimeout(url, timeoutMs, headers = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { headers, signal: controller.signal });
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 SkinScanResolver/1.0',
+        'Accept-Language': 'en-US,en;q=0.9',
+        ...headers
+      },
+      signal: controller.signal
+    });
     if (!res.ok) throw new Error(`http_${res.status}`);
     return await res.json();
   } finally {
@@ -1542,7 +1555,15 @@ async function fetchTextWithTimeout(url, timeoutMs, headers = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { headers, signal: controller.signal });
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 SkinScanResolver/1.0',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7',
+        'Accept-Language': 'en-US,en;q=0.9',
+        ...headers
+      },
+      signal: controller.signal
+    });
     if (!res.ok) throw new Error(`http_${res.status}`);
     return await res.text();
   } finally {
@@ -1990,6 +2011,19 @@ function extractIngredientBlockFromHtml(text, sourceUrl = '') {
       const candidate = normalizeIngredientText(tokens.join(', '));
       const quality = scoreIngredientCandidate(candidate);
       if (quality.valid) return { ingredientsText: candidate, confidence: quality.confidence };
+    }
+
+    // Some INCI pages embed ingredients as objects in a large JSON payload.
+    const ingredientObjectArray = String(text).match(/"ingredients"\s*:\s*\[([\s\S]{120,80000}?)\]/i);
+    if (ingredientObjectArray && ingredientObjectArray[1]) {
+      const names = [
+        ...ingredientObjectArray[1].matchAll(/"(?:name|inci_name|inciName)"\s*:\s*"([^"]{2,220})"/gi)
+      ].map(m => decodeHtmlEntities(m[1]).trim()).filter(Boolean);
+      if (names.length >= 4) {
+        const candidate = normalizeIngredientText(names.join(', '));
+        const quality = scoreIngredientCandidate(candidate);
+        if (quality.valid) return { ingredientsText: candidate, confidence: quality.confidence };
+      }
     }
   }
 
