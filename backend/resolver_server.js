@@ -1708,6 +1708,49 @@ async function fetchProductCandidatesFromIncidecoder(query) {
   return products;
 }
 
+function parseIncidecoderSearchLinks(text) {
+  return [...String(text || '').matchAll(/href=["']\/products\/([^"']+)["'][^>]*>([^<]{3,220})</gi)]
+    .map(m => ({ slug: String(m[1] || '').trim(), title: String(m[2] || '').trim() }))
+    .filter(x => x.slug);
+}
+
+async function fetchIngredientsFromIncidecoderSearch(query, timeoutMs = INGREDIENT_SOURCE_TIMEOUT_MS) {
+  const cacheKey = `inci-ing:${normalizeText(query)}`;
+  const cached = getSourceCache(cacheKey);
+  if (cached) return cached;
+
+  const searchUrl = `https://incidecoder.com/search/product?query=${encodeURIComponent(query)}`;
+  const searchHtml = await fetchTextWithTimeout(searchUrl, Math.max(1200, Math.floor(timeoutMs * 0.45)), {
+    'User-Agent': 'SkinScanResolver/1.0 (support@skinscan.local)'
+  });
+  const links = parseIncidecoderSearchLinks(searchHtml).slice(0, 4);
+  if (!links.length) return null;
+
+  for (const link of links) {
+    const url = `https://incidecoder.com/products/${encodeURIComponent(link.slug)}`;
+    try {
+      const pageHtml = await fetchTextWithTimeout(url, Math.max(1200, Math.floor(timeoutMs * 0.55)), {
+        'User-Agent': 'SkinScanResolver/1.0 (support@skinscan.local)'
+      });
+      const parsed = extractIngredientBlockFromHtml(pageHtml, url);
+      if (!parsed) continue;
+      const payload = {
+        source: 'incidecoder',
+        sourceUrl: url,
+        ingredientsText: parsed.ingredientsText,
+        confidence: parsed.confidence,
+        imageUrl: '',
+        category: ''
+      };
+      setSourceCache(cacheKey, payload, 6 * 60 * 60 * 1000);
+      return payload;
+    } catch (_) {
+      // continue to next likely product URL
+    }
+  }
+  return null;
+}
+
 function extractJsonLdIngredients(text) {
   const scripts = [...String(text || '').matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
   for (const block of scripts) {
@@ -2644,7 +2687,8 @@ function buildAdapters(product, query, discoveredUrls = []) {
       }
     },
     { name: 'obf', exec: (timeoutMs) => fetchIngredientsFromOBF(q, timeoutMs) },
-    { name: 'incidecoder', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'brand', [...discoveredUrls, ...((product.source_urls || []).filter(u => String(u).includes('incidecoder.com')))], timeoutMs) },
+    { name: 'incidecoder', exec: (timeoutMs) => fetchIngredientsFromIncidecoderSearch(q, timeoutMs) },
+    { name: 'incidecoder_url', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'brand', [...discoveredUrls, ...((product.source_urls || []).filter(u => String(u).includes('incidecoder.com')))], timeoutMs) },
     { name: 'retailer', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'retailer', discoveredUrls, timeoutMs) },
     { name: 'brand', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'brand', discoveredUrls, timeoutMs) },
     { name: 'ai', exec: (timeoutMs) => fetchIngredientsFromAIFallback(q, timeoutMs) }
