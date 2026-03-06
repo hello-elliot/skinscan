@@ -1828,6 +1828,21 @@ async function fetchIngredientsFromIncidecoderSearch(query, timeoutMs = INGREDIE
   return null;
 }
 
+async function fetchImmediateIngredientsByQuery(query, budgetMs = 4200) {
+  const q = String(query || '').trim();
+  if (!q) return null;
+  const started = Date.now();
+  const left = () => Math.max(250, budgetMs - (Date.now() - started));
+
+  const obf = await fetchIngredientsFromOBF(q, Math.min(2200, left())).catch(() => null);
+  if (obf?.ingredientsText) return obf;
+
+  const inci = await fetchIngredientsFromIncidecoderSearch(q, Math.min(2800, left())).catch(() => null);
+  if (inci?.ingredientsText) return inci;
+
+  return null;
+}
+
 function extractJsonLdIngredients(text) {
   const scripts = [...String(text || '').matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
   for (const block of scripts) {
@@ -2961,6 +2976,34 @@ function enrichResolutionPayload(result, query, locale, region, options = {}) {
   });
 }
 
+function persistResolvedProductIngredients(productId, resolvedPayload) {
+  if (!productId || !resolvedPayload?.ingredientsText) return false;
+  const normalizedIngredients = normalizeIngredientText(resolvedPayload.ingredientsText);
+  const quality = scoreIngredientCandidate(normalizedIngredients);
+  if (!quality.valid) return false;
+
+  const index = readIndex();
+  const product = index.products.find(x => x.product_id === productId);
+  if (!product) return false;
+
+  product.ingredients_text = normalizedIngredients;
+  product.ingredients_status = 'available';
+  product.ingredients_source = String(resolvedPayload.source || 'direct_lookup');
+  product.ingredients_last_verified_at = nowIso();
+  product.ingredients_version_hash = hashText(normalizedIngredients);
+  product.ingredients_confidence = Number(resolvedPayload.confidence || quality.confidence || 0.7);
+  if (resolvedPayload.imageUrl && !product.image_url) product.image_url = resolvedPayload.imageUrl;
+  if (resolvedPayload.category && !product.category) product.category = resolvedPayload.category;
+  product.confidence_metadata = {
+    ...(product.confidence_metadata || {}),
+    freshness: 'daily',
+    updated_at: nowIso()
+  };
+  writeIndex(index);
+  upsertCatalogProducts([product]);
+  return true;
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -3034,6 +3077,26 @@ async function handleResolveProducts(req, res) {
       decisionReason: result.decisionReason,
       brandMismatchFlag: result.decisionReason === 'brand_mismatch'
     });
+  }
+
+  if (result.product?.productId && result.product.ingredientsStatus !== 'available') {
+    const direct = await fetchImmediateIngredientsByQuery(query, 4200).catch(() => null);
+    if (direct?.ingredientsText) {
+      const persisted = persistResolvedProductIngredients(result.product.productId, direct);
+      if (persisted) {
+        const refreshed = readIndex().products.find(x => x.product_id === result.product.productId);
+        if (refreshed) {
+          result.product.ingredientsStatus = refreshed.ingredients_status || 'available';
+          result.product.ingredientsText = refreshed.ingredients_text || '';
+          result.product.ingredientResolutionState = 'available';
+          result.product.ingredientFailureStage = '';
+        }
+        pushMetric('ingredient_direct_lookup_hit', {
+          productId: result.product.productId,
+          source: direct.source || 'direct_lookup'
+        });
+      }
+    }
   }
 
   pushMetric('resolver_resolved', { query: result.normalized_query, state: result.state });
