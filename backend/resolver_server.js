@@ -2634,11 +2634,27 @@ function withJobState(productId, patch) {
     attempts: 0,
     lastError: '',
     attemptCount: 0,
-    done: false
+    done: false,
+    adapterTrace: []
   };
   const next = { ...prev, ...patch, updatedAt: nowIso() };
   ingredientJobs.set(productId, next);
   return next;
+}
+
+function appendJobAdapterTrace(productId, traceItem) {
+  const prev = ingredientJobs.get(productId) || {};
+  const trace = Array.isArray(prev.adapterTrace) ? prev.adapterTrace : [];
+  const nextTrace = [...trace, { ...traceItem, ts: nowIso() }].slice(-24);
+  withJobState(productId, { adapterTrace: nextTrace });
+}
+
+async function withTimeoutValue(promise, timeoutMs, fallbackValue) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return fallbackValue;
+  return Promise.race([
+    promise,
+    new Promise(resolve => setTimeout(() => resolve(fallbackValue), timeoutMs))
+  ]);
 }
 
 async function tryAdapter(name, fn, context) {
@@ -2709,7 +2725,8 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
       attemptCount: prevAttempts + 1,
       attempts: prevAttempts + 1,
       done: false,
-      lastError: ''
+      lastError: '',
+      adapterTrace: []
     });
     pushMetric('ingredient_resolve_started', { productId, query, mode: options.syncMode ? 'sync' : 'async' });
 
@@ -2728,7 +2745,13 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
 
     const context = { deadline: Date.now() + SYNC_ENRICH_BUDGET_MS };
     const discoveryQuery = query || `${product.brand_canonical} ${product.name_canonical}`.trim();
-    const discoveredUrls = await discoverPdpUrls(discoveryQuery, product).catch(() => []);
+    const discoveryBudgetMs = Math.max(350, Math.min(1800, context.deadline - Date.now() - 3200));
+    const discoveredUrls = await withTimeoutValue(
+      discoverPdpUrls(discoveryQuery, product).catch(() => []),
+      discoveryBudgetMs,
+      []
+    );
+    appendJobAdapterTrace(productId, { stage: 'discovery', budgetMs: discoveryBudgetMs, discoveredCount: discoveredUrls.length });
     if (discoveredUrls.length) {
       product.source_urls = [...new Set([...(product.source_urls || []), ...discoveredUrls])];
       writeIndex(index);
@@ -2738,9 +2761,11 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
     let finalFailureStage = 'no_ingredient_block_found';
 
     for (const adapter of adapters) {
+      appendJobAdapterTrace(productId, { stage: 'adapter_start', adapter: adapter.name });
       const attempt = await tryAdapter(adapter.name, adapter.exec, context);
       if (!attempt.ok) {
         finalFailureStage = attempt.failureStage;
+        appendJobAdapterTrace(productId, { stage: 'adapter_fail', adapter: adapter.name, failureStage: attempt.failureStage });
         continue;
       }
 
@@ -2748,6 +2773,7 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
       const quality = scoreIngredientCandidate(normalizedIngredients);
       if (!quality.valid) {
         finalFailureStage = quality.reason || 'validation_failed';
+        appendJobAdapterTrace(productId, { stage: 'adapter_fail', adapter: adapter.name, failureStage: finalFailureStage });
         continue;
       }
 
@@ -2779,6 +2805,7 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
       });
 
       withJobState(productId, { state: 'available', done: true, lastError: '' });
+      appendJobAdapterTrace(productId, { stage: 'adapter_success', adapter: adapter.name, source: attempt.result.source });
       pushMetric('ingredient_resolve_succeeded', {
         productId,
         source: attempt.result.source,
@@ -2791,6 +2818,7 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
 
     const nextState = (ingredientJobs.get(productId)?.attemptCount || 0) >= 2 ? 'unavailable_final' : 'unavailable_retryable';
     withJobState(productId, { state: nextState, done: true, lastError: finalFailureStage });
+    appendJobAdapterTrace(productId, { stage: 'final', failureStage: finalFailureStage, state: nextState });
 
     upsertMiss(query || `${product.brand_canonical} ${product.name_canonical}`, normalizeText(query || product.name_canonical || ''), finalFailureStage, {
       productId,
@@ -3005,7 +3033,8 @@ function getIngredientStatus(productId) {
       ingredientsSource: product.ingredients_source || '',
       updatedAt: product.ingredients_last_verified_at || product.confidence_metadata?.updated_at || '',
       failureStage: job?.lastError || '',
-      attemptCount: job?.attemptCount || 0
+      attemptCount: job?.attemptCount || 0,
+      adapterTrace: Array.isArray(job?.adapterTrace) ? job.adapterTrace : []
     }
   };
 }
