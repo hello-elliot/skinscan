@@ -586,6 +586,9 @@ function setSourceCache(key, payload, ttlMs = SOURCE_CACHE_TTL_MS) {
 }
 
 function adapterOpen(name) {
+  // AI fallback should remain available for ingredient recovery attempts.
+  // Circuit-breaking it makes long-tail products fail hard when other sources miss.
+  if (name === 'ai') return false;
   return Date.now() < (sourceCircuit[name]?.openUntil || 0);
 }
 
@@ -597,11 +600,17 @@ function markAdapterSuccess(name) {
 
 function markAdapterFailure(name) {
   if (!sourceCircuit[name]) return;
+  if (name === 'ai') return;
   sourceCircuit[name].failures += 1;
   if (sourceCircuit[name].failures >= CIRCUIT_FAIL_THRESHOLD) {
     sourceCircuit[name].openUntil = Date.now() + CIRCUIT_OPEN_MS;
     sourceCircuit[name].failures = 0;
   }
+}
+
+function isRetryableIngredientFailure(stage = '') {
+  const s = String(stage || '').toLowerCase();
+  return s === 'rate_limited' || s === 'source_timeout' || s === 'fetch_timeout';
 }
 
 function applyCorrections(normalizedQuery) {
@@ -798,7 +807,7 @@ function inferResolutionState(productId, product) {
   if (job?.state === 'resolving_sync') return 'resolving_sync';
   if (job?.state === 'resolving_async') return 'resolving_async';
   if (!job) return 'unavailable_retryable';
-  if (job.attempts >= 2 && job.lastError) return 'unavailable_final';
+  if (job.attempts >= 2 && job.lastError && !isRetryableIngredientFailure(job.lastError)) return 'unavailable_final';
   return 'unavailable_retryable';
 }
 
@@ -2816,7 +2825,10 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
       return;
     }
 
-    const nextState = (ingredientJobs.get(productId)?.attemptCount || 0) >= 2 ? 'unavailable_final' : 'unavailable_retryable';
+    const attempts = ingredientJobs.get(productId)?.attemptCount || 0;
+    const nextState = (attempts >= 2 && !isRetryableIngredientFailure(finalFailureStage))
+      ? 'unavailable_final'
+      : 'unavailable_retryable';
     withJobState(productId, { state: nextState, done: true, lastError: finalFailureStage });
     appendJobAdapterTrace(productId, { stage: 'final', failureStage: finalFailureStage, state: nextState });
 
