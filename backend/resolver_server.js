@@ -1744,6 +1744,55 @@ function splitBrandAndName(rawName = '', inferredBrand = '') {
   return { brand, name };
 }
 
+function inferBrandFromName(rawName = '') {
+  const tokens = String(rawName || '').trim().split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) return '';
+  let take = 2;
+  if (tokens[1] && tokens[1].toLowerCase() === 'of' && tokens.length >= 3) take = 3;
+  if (tokens[0] && tokens[0].toLowerCase() === 'dr' && tokens.length >= 2) take = 2;
+  return tokens.slice(0, Math.min(4, take)).join(' ').trim();
+}
+
+function slugCandidatesFromText(value = '') {
+  const normalized = normalizeText(value).replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  if (!normalized) return [];
+  const out = new Set([normalized]);
+  out.add(normalized.replace(/\b(and|the)\b/g, '').replace(/-+/g, '-').replace(/^-|-$/g, ''));
+  out.add(normalized.replace(/\b(cleanser|cream|serum|essence|mask|lotion)\b/g, '').replace(/-+/g, '-').replace(/^-|-$/g, ''));
+  return [...out].filter(Boolean);
+}
+
+async function fetchIngredientsFromIncidecoderSlugGuesses(product, query, timeoutMs = INGREDIENT_SOURCE_TIMEOUT_MS) {
+  const parts = [];
+  if (product?.source_urls?.length) {
+    product.source_urls
+      .filter(u => String(u).includes('incidecoder.com/products/'))
+      .forEach(u => parts.push(String(u).split('/products/')[1] || ''));
+  }
+  parts.push(...slugCandidatesFromText(`${product?.brand_canonical || ''} ${product?.name_canonical || ''}`));
+  parts.push(...slugCandidatesFromText(query || ''));
+  const slugs = [...new Set(parts.map(s => String(s || '').trim().replace(/^\/+|\/+$/g, '')).filter(Boolean))].slice(0, 10);
+  for (const slug of slugs) {
+    const url = `https://incidecoder.com/products/${encodeURIComponent(slug)}`;
+    try {
+      const html = await fetchTextWithTimeout(url, timeoutMs, {
+        'User-Agent': 'SkinScanResolver/1.0 (support@skinscan.local)'
+      });
+      const parsed = extractIngredientBlockFromHtml(html, url);
+      if (!parsed?.ingredientsText) continue;
+      return {
+        source: 'incidecoder',
+        sourceUrl: url,
+        ingredientsText: parsed.ingredientsText,
+        confidence: parsed.confidence,
+        imageUrl: '',
+        category: ''
+      };
+    } catch (_) {}
+  }
+  return null;
+}
+
 async function fetchProductCandidatesFromIncidecoder(query) {
   const cacheKey = `inci-candidates:${normalizeText(query)}`;
   const cached = getSourceCache(cacheKey);
@@ -1757,7 +1806,7 @@ async function fetchProductCandidatesFromIncidecoder(query) {
 
   const products = links.slice(0, 16).map(({ slug, title }) => {
     const rawName = title || slugToTitle(slug);
-    const inferredBrand = String(rawName || '').split(/\s+/).slice(0, 2).join(' ').trim();
+    const inferredBrand = inferBrandFromName(rawName);
     const split = splitBrandAndName(rawName, inferredBrand);
     const brand = split.brand || inferredBrand;
     const name = split.name || rawName;
@@ -1861,6 +1910,9 @@ async function fetchImmediateIngredientsForProduct(product, query, budgetMs = 52
   if (!product) return null;
   const started = Date.now();
   const left = () => Math.max(300, budgetMs - (Date.now() - started));
+
+  const inciGuess = await fetchIngredientsFromIncidecoderSlugGuesses(product, query || `${product.brand_canonical} ${product.name_canonical}`, Math.min(2400, left())).catch(() => null);
+  if (inciGuess?.ingredientsText) return inciGuess;
 
   const sourceUrls = Array.isArray(product.source_urls) ? product.source_urls.filter(Boolean) : [];
   if (sourceUrls.length) {
@@ -2841,9 +2893,10 @@ function buildAdapters(product, query, discoveredUrls = []) {
         };
       }
     },
-    { name: 'obf', exec: (timeoutMs) => fetchIngredientsFromOBF(q, timeoutMs) },
-    { name: 'incidecoder', exec: (timeoutMs) => fetchIngredientsFromIncidecoderSearch(q, timeoutMs) },
     { name: 'incidecoder_url', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'brand', [...discoveredUrls, ...((product.source_urls || []).filter(u => String(u).includes('incidecoder.com')))], timeoutMs) },
+    { name: 'incidecoder_slug', exec: (timeoutMs) => fetchIngredientsFromIncidecoderSlugGuesses(product, q, timeoutMs) },
+    { name: 'incidecoder', exec: (timeoutMs) => fetchIngredientsFromIncidecoderSearch(q, timeoutMs) },
+    { name: 'obf', exec: (timeoutMs) => fetchIngredientsFromOBF(q, timeoutMs) },
     { name: 'retailer', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'retailer', discoveredUrls, timeoutMs) },
     { name: 'brand', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'brand', discoveredUrls, timeoutMs) },
     { name: 'ai', exec: (timeoutMs) => fetchIngredientsFromAIFallback(q, timeoutMs) }
