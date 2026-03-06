@@ -805,6 +805,7 @@ let capturedPhotoBase64 = null;   // base64 image data from camera
 let lastAnalysisData = null;      // gap #4: store last result for re-analysis
 let autoReanalyzeTimer = null;
 let latestSuggestRequestId = 0;
+let activeSuggestAbortController = null;
 let searchState = 'idle';
 let lastSuggestionMeta = null;
 let addProductState = 'add_idle';
@@ -1362,77 +1363,6 @@ async function submitAddProduct() {
     updateAddProductUi('add_failed', { text: 'Could not submit right now. Try again in a moment.' });
   }
 }
-async function triggerSuggest(query) {
-  const requestId = ++latestSuggestRequestId;
-  setSearchState('searching', { query });
-  const resolution = await resolveProduct(query, { includeWebFallback: false, forSuggest: true });
-  if (requestId !== latestSuggestRequestId || productInput.value.trim() !== query.trim()) return;
-  if (resolution.state === 'error') {
-    setSearchState('error', { query });
-    return;
-  }
-  if (resolution.state === 'resolved_high') {
-    if (resolution.autoResolved === false && resolution.product) {
-      showSuggestions([resolution.product], {
-        confirmMode: true,
-        meta: { query, normalizedQuery: resolution.normalizedQuery || normalizeQuery(query), selectionContext: 'suggestions' }
-      });
-      setSearchState('results', { query });
-      trackEvent('product_confirmation_shown', { query, confidence: 'high_guarded', decisionReason: resolution.decisionReason || 'guarded_high' });
-      return;
-    }
-    setSearchState('idle', { query });
-    return;
-  }
-  if (resolution.state === 'resolved_medium') {
-    showSuggestions([resolution.product], {
-      confirmMode: true,
-      meta: { query, normalizedQuery: resolution.normalizedQuery || normalizeQuery(query), selectionContext: 'suggestions' }
-    });
-    setSearchState('results', { query });
-    trackEvent('product_confirmation_shown', { query, confidence: 'medium', decisionReason: resolution.decisionReason || '' });
-    return;
-  }
-  const unknownBrandCandidates = (resolution.candidates || []).filter(c => Number(c.brandSimilarity || 0) >= 0.55 || Number(c.nameSimilarity || 0) >= 0.86);
-  if (resolution.state === 'candidate_list' && resolution.decisionReason === 'unknown_brand') {
-    if (unknownBrandCandidates.length) {
-      showSuggestions(unknownBrandCandidates.slice(0, 7), {
-        confirmMode: false,
-        meta: {
-          query,
-          normalizedQuery: resolution.normalizedQuery || normalizeQuery(query),
-          selectionContext: 'suggestions',
-          decisionReason: resolution.decisionReason || ''
-        }
-      });
-      setSearchState('results', { query });
-      return;
-    }
-    showCandidateStatusMessage('No close match yet. Add a product URL below for fast indexing.');
-    showAddProductCapture({
-      query,
-      normalizedQuery: resolution.normalizedQuery || normalizeQuery(query),
-      decisionReason: 'unknown_brand'
-    });
-    setSearchState('unknown_brand_no_candidates', { query });
-    return;
-  }
-  if (resolution.state === 'candidate_list' && resolution.candidates?.length) {
-    showSuggestions(resolution.candidates.slice(0, 7), {
-      confirmMode: false,
-      meta: {
-        query,
-        normalizedQuery: resolution.normalizedQuery || normalizeQuery(query),
-        selectionContext: 'suggestions',
-        decisionReason: resolution.decisionReason || ''
-      }
-    });
-    setSearchState('results', { query });
-    return;
-  }
-  setSearchState('empty', { query });
-  trackEvent('search_no_match', { query, decisionReason: resolution.decisionReason || '' });
-}
 async function searchOBF(query) {
   const url = `https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=8&fields=product_name,brands,ingredients_text,image_small_url,categories`;
   const res = await fetch(url, { headers: { 'User-Agent': 'SkinScan/1.0 (skinscan@example.com)' } });
@@ -1798,17 +1728,19 @@ async function resolveProductFromBackend(query, options = {}) {
     const locale = (navigator.language || 'en-US');
     const region = (locale.split('-')[1] || '').toUpperCase();
     const endpoint = options.fast ? '/resolver/products/fast' : '/resolver/products';
-    let res = await fetch(resolverUrl(endpoint), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, locale, region })
-    });
-    if (!res.ok && options.fast) {
-      res = await fetch(resolverUrl('/resolver/products'), {
+    const timeoutMs = Number(options.timeoutMs || (options.fast ? 1800 : 12000));
+    const controller = options.abortController || new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res;
+    try {
+      res = await fetch(resolverUrl(endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, locale, region })
+        body: JSON.stringify({ query, locale, region }),
+        signal: controller.signal
       });
+    } finally {
+      clearTimeout(timer);
     }
     if (!res.ok) return null;
     const data = await res.json();
@@ -1831,8 +1763,13 @@ async function resolveProductFromBackend(query, options = {}) {
     return null;
   }
 }
+
 async function resolveProduct(query, options = {}) {
-  const backend = await resolveProductFromBackend(query, { fast: !!options.forSuggest });
+  const backend = await resolveProductFromBackend(query, {
+    fast: !!options.forSuggest,
+    timeoutMs: options.forSuggest ? 1800 : 12000,
+    abortController: options.abortController || null
+  });
   if (backend && backend.state && backend.state !== 'error') {
     if (options.forSuggest) return backend;
     const backendLowSignal = (
@@ -1862,7 +1799,90 @@ async function resolveProduct(query, options = {}) {
     }
     return backend;
   }
+  if (options.forSuggest) {
+    return { state: 'error', decisionReason: 'backend_unavailable', autoResolved: false, candidates: [] };
+  }
   return resolveProductLocal(query, options);
+}
+
+async function triggerSuggest(query) {
+  if (activeSuggestAbortController) {
+    try { activeSuggestAbortController.abort(); } catch (_) {}
+  }
+  activeSuggestAbortController = new AbortController();
+  const requestId = ++latestSuggestRequestId;
+  setSearchState('searching', { query });
+  const resolution = await resolveProduct(query, {
+    includeWebFallback: false,
+    forSuggest: true,
+    abortController: activeSuggestAbortController
+  });
+  if (requestId !== latestSuggestRequestId || productInput.value.trim() !== query.trim()) return;
+  if (resolution.state === 'error') {
+    setSearchState('error', { query });
+    return;
+  }
+  if (resolution.state === 'resolved_high') {
+    if (resolution.autoResolved === false && resolution.product) {
+      showSuggestions([resolution.product], {
+        confirmMode: true,
+        meta: { query, normalizedQuery: resolution.normalizedQuery || normalizeQuery(query), selectionContext: 'suggestions' }
+      });
+      setSearchState('results', { query });
+      trackEvent('product_confirmation_shown', { query, confidence: 'high_guarded', decisionReason: resolution.decisionReason || 'guarded_high' });
+      return;
+    }
+    setSearchState('idle', { query });
+    return;
+  }
+  if (resolution.state === 'resolved_medium') {
+    showSuggestions([resolution.product], {
+      confirmMode: true,
+      meta: { query, normalizedQuery: resolution.normalizedQuery || normalizeQuery(query), selectionContext: 'suggestions' }
+    });
+    setSearchState('results', { query });
+    trackEvent('product_confirmation_shown', { query, confidence: 'medium', decisionReason: resolution.decisionReason || '' });
+    return;
+  }
+  const unknownBrandCandidates = (resolution.candidates || []).filter(c => Number(c.brandSimilarity || 0) >= 0.55 || Number(c.nameSimilarity || 0) >= 0.86);
+  if (resolution.state === 'candidate_list' && resolution.decisionReason === 'unknown_brand') {
+    if (unknownBrandCandidates.length) {
+      showSuggestions(unknownBrandCandidates.slice(0, 7), {
+        confirmMode: false,
+        meta: {
+          query,
+          normalizedQuery: resolution.normalizedQuery || normalizeQuery(query),
+          selectionContext: 'suggestions',
+          decisionReason: resolution.decisionReason || ''
+        }
+      });
+      setSearchState('results', { query });
+      return;
+    }
+    showCandidateStatusMessage('No close match yet. Add a product URL below for fast indexing.');
+    showAddProductCapture({
+      query,
+      normalizedQuery: resolution.normalizedQuery || normalizeQuery(query),
+      decisionReason: 'unknown_brand'
+    });
+    setSearchState('unknown_brand_no_candidates', { query });
+    return;
+  }
+  if (resolution.state === 'candidate_list' && resolution.candidates?.length) {
+    showSuggestions(resolution.candidates.slice(0, 7), {
+      confirmMode: false,
+      meta: {
+        query,
+        normalizedQuery: resolution.normalizedQuery || normalizeQuery(query),
+        selectionContext: 'suggestions',
+        decisionReason: resolution.decisionReason || ''
+      }
+    });
+    setSearchState('results', { query });
+    return;
+  }
+  setSearchState('empty', { query });
+  trackEvent('search_no_match', { query, decisionReason: resolution.decisionReason || '' });
 }
 async function sendCandidateSelectionFeedback(payload) {
   if (!payload?.selectedProductId) return;
