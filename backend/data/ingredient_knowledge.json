@@ -177,12 +177,52 @@
       "func": "humectant"
     },
     "PHYTOSTERYL OLEATE": {
-      "acne": 1,
+      "acne": 2,
       "irr": 0,
       "dry": 0,
       "al": 0,
       "safe": true,
       "func": "emollient"
+    },
+    "STEARIC ACID": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "fatty acid/emollient"
+    },
+    "PALMITIC ACID": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "fatty acid/emollient"
+    },
+    "GLYCERYL STEARATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient/emulsifier"
+    },
+    "GLYCERYL OLEATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient"
+    },
+    "BUTYROSPERMUM PARKII BUTTER": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient/occlusive"
     },
     "C12-16 ALCOHOLS": {
       "acne": 1,
@@ -269,6 +309,14 @@
     "LACTIC ACID/GLYCOLIC ACID COPOLYMER": "LACTIC ACID/GLYCOLIC ACID COPOLYMER",
     "COCO-CAPRYLATE/CAPRATE": "COCO-CAPRYLATE/CAPRATE",
     "GLYECRIN": "GLYCERIN"
+    ,
+    "STEARIC ACID": "STEARIC ACID",
+    "PALMITIC ACID": "PALMITIC ACID",
+    "GLYCERYL STEARATE": "GLYCERYL STEARATE",
+    "GLYCERYL OLEATE": "GLYCERYL OLEATE",
+    "BUTYROSPERMUM PARKII BUTTER": "BUTYROSPERMUM PARKII BUTTER",
+    "BUTYROSPERMUM PARKII (SHEA) BUTTER": "BUTYROSPERMUM PARKII BUTTER",
+    "SHEA BUTTER": "BUTYROSPERMUM PARKII BUTTER"
   },
   "family_rules": [
     {
