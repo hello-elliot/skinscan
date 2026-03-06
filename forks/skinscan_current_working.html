@@ -549,7 +549,7 @@ const CI_MAP = {
 
 // ── Normalize a single raw ingredient token ──────────────────────────────────
 function normalizeIngredient(raw) {
-  let s = raw.toUpperCase().trim();
+  let s = raw.toUpperCase().replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
 
   // Strip trailing footnote markers: *, **, †, ‡, §, ¶, #, (1), [1]
   s = s.replace(/[\s]*[\*†‡§¶#]+[\s]*$/, '').trim();
@@ -565,6 +565,7 @@ function normalizeIngredient(raw) {
 
   // Normalize spaces around hyphens in numeric INCI: "ALPHA - ARBUTIN" -> "ALPHA-ARBUTIN"
   s = s.replace(/\b(ALPHA|BETA|GAMMA|DELTA)\s*-\s+/g, '$1-');
+  s = s.replace(/\s*\/\s*/g, '/');
 
   // Normalize bracket common names: "GLYCERIN [GLYCEROL]" -> "GLYCERIN"
   s = s.replace(/\s*\[[^\]]+\]\s*$/, '').trim();
@@ -851,7 +852,7 @@ function setSearchState(nextState, options = {}) {
     : nextState === 'unknown_brand_no_candidates'
       ? 'No close match yet. Add product URL below for fast indexing.'
     : nextState === 'empty'
-      ? 'No matching product found. Try brand + full product name.'
+      ? 'No instant suggestion yet. Press Enter to run full search.'
       : 'Search temporarily unavailable. You can still paste ingredients.';
   const statusClass = nextState === 'error' ? 'sug-status error' : 'sug-status';
   suggestionsEl.innerHTML = `<div class="${statusClass}">${nextState === 'searching' ? '<span class="mini-spinner"></span>' : ''}<span>${escHtml(statusText)}</span></div>`;

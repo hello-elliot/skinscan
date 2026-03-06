@@ -764,6 +764,7 @@ function blockedProductSetForQuery(query, negativeRules = {}) {
 function normalizeIngredientText(raw) {
   if (!raw) return '';
   const scrubbed = String(raw)
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
     .replace(/<[^>]+>/g, ' ')
     .replace(/ingredients?\s*[:\-]/ig, ' ')
     .replace(/\(and\)/ig, ',')
