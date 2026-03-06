@@ -20,6 +20,7 @@ const SOURCE_CACHE_PATH = path.join(DATA_DIR, 'source_cache.json');
 const UNKNOWN_QUEUE_PATH = path.join(DATA_DIR, 'unknown_ingredient_queue.json');
 const CANDIDATE_FEEDBACK_PATH = path.join(DATA_DIR, 'candidate_feedback_queue.json');
 const NEGATIVE_ALIAS_RULES_PATH = path.join(DATA_DIR, 'negative_alias_rules.json');
+const PROMOTION_REPORT_PATH = path.join(DATA_DIR, 'promotion_report.json');
 const ADD_PRODUCT_QUEUE_PATH = path.join(DATA_DIR, 'add_product_queue.json');
 const INGESTION_JOBS_PATH = path.join(DATA_DIR, 'ingestion_jobs.json');
 const SOURCE_PROFILE_PATH = path.join(DATA_DIR, 'product_source_profiles.json');
@@ -35,6 +36,7 @@ const SOURCE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SOURCE_TIMEOUT_MS = 3000;
 const SYNC_ENRICH_BUDGET_MS = 10000;
 const ASYNC_POLL_BUDGET_MS = 8000;
+const FAST_SEARCH_BUDGET_MS = Number(process.env.FAST_SEARCH_BUDGET_MS || 1500);
 const CIRCUIT_OPEN_MS = 5 * 60 * 1000;
 const CIRCUIT_FAIL_THRESHOLD = 3;
 const AI_PROXY_URL = process.env.AI_PROXY_URL || 'https://skinscan-proxy.kelly-f.workers.dev';
@@ -57,6 +59,7 @@ const ingredientJobs = new Map();
 const activeIngredientResolves = new Map();
 const sourceCircuit = {
   obf: { failures: 0, openUntil: 0 },
+  incidecoder: { failures: 0, openUntil: 0 },
   retailer: { failures: 0, openUntil: 0 },
   brand: { failures: 0, openUntil: 0 },
   ai: { failures: 0, openUntil: 0 }
@@ -1398,6 +1401,8 @@ async function fetchCandidatesFromConnectors(query) {
   const out = [];
   const obf = await fetchProductCandidatesFromOBF(query).catch(() => []);
   out.push(...obf);
+  const inci = await fetchProductCandidatesFromIncidecoder(query).catch(() => []);
+  out.push(...inci);
   if (out.length < 4) {
     const ai = await fetchProductCandidatesFromAI(query).catch(() => []);
     out.push(...ai);
@@ -1635,6 +1640,54 @@ async function fetchProductCandidatesFromAI(query) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function slugToTitle(slug = '') {
+  return String(slug || '')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .map(w => (w ? w[0].toUpperCase() + w.slice(1) : ''))
+    .join(' ');
+}
+
+async function fetchProductCandidatesFromIncidecoder(query) {
+  const cacheKey = `inci-candidates:${normalizeText(query)}`;
+  const cached = getSourceCache(cacheKey);
+  if (cached) return cached;
+
+  const url = `https://incidecoder.com/search/product?query=${encodeURIComponent(query)}`;
+  const text = await fetchTextWithTimeout(url, SOURCE_TIMEOUT_MS, { 'User-Agent': 'SkinScanResolver/1.0 (support@skinscan.local)' });
+  const links = [...String(text || '').matchAll(/href=["']\/products\/([^"']+)["'][^>]*>([^<]{3,220})</gi)]
+    .map(m => ({ slug: String(m[1] || '').trim(), title: String(m[2] || '').trim() }))
+    .filter(x => x.slug && x.title);
+
+  const products = links.slice(0, 16).map(({ slug, title }) => {
+    const name = title || slugToTitle(slug);
+    const inferredBrand = String(name || '').split(/\s+/).slice(0, 2).join(' ').trim();
+    return asCatalogProduct({
+      product_id: slugifyProductId(inferredBrand || 'incidecoder', name),
+      brand_canonical: inferredBrand || '',
+      name_canonical: name,
+      name_aliases: [normalizeText(name), normalizeText(slug.replace(/-/g, ' '))],
+      brand_aliases: inferredBrand ? [normalizeText(inferredBrand)] : [],
+      line: '',
+      category: '',
+      image_url: '',
+      ingredients_status: 'missing',
+      ingredients_text: '',
+      ingredients_source: '',
+      ingredients_last_verified_at: '',
+      ingredients_version_hash: '',
+      ingredients_confidence: 0,
+      source_priority: 74,
+      confidence_metadata: { quality: 'medium', freshness: 'daily', updated_at: nowIso(), popularity: 0.3 },
+      source_urls: [`https://incidecoder.com/products/${slug}`]
+    });
+  });
+  setSourceCache(cacheKey, products, 6 * 60 * 60 * 1000);
+  return products;
 }
 
 function extractJsonLdIngredients(text) {
@@ -2131,6 +2184,11 @@ async function discoverPdpUrls(query, product) {
     .filter(c => overlapScore(`${query} ${product.brand_canonical} ${product.name_canonical}`, `${c.brand_canonical} ${c.name_canonical}`) >= 0.58)
     .forEach(c => (c.source_urls || []).forEach(u => urls.add(u)));
 
+  const inciCandidates = await fetchProductCandidatesFromIncidecoder(query).catch(() => []);
+  inciCandidates
+    .filter(c => overlapScore(`${query} ${product.brand_canonical} ${product.name_canonical}`, `${c.brand_canonical} ${c.name_canonical}`) >= 0.62)
+    .forEach(c => (c.source_urls || []).forEach(u => urls.add(u)));
+
   if (urls.size < 2) {
     const aiCandidates = await fetchProductCandidatesFromAI(query).catch(() => []);
     aiCandidates
@@ -2517,6 +2575,7 @@ function buildAdapters(product, query, discoveredUrls = []) {
       }
     },
     { name: 'obf', exec: () => fetchIngredientsFromOBF(q) },
+    { name: 'incidecoder', exec: () => fetchIngredientsFromProfileUrls(product.product_id, 'brand', [...discoveredUrls, ...((product.source_urls || []).filter(u => String(u).includes('incidecoder.com')))]) },
     { name: 'retailer', exec: () => fetchIngredientsFromProfileUrls(product.product_id, 'retailer', discoveredUrls) },
     { name: 'brand', exec: () => fetchIngredientsFromProfileUrls(product.product_id, 'brand', discoveredUrls) },
     { name: 'ai', exec: () => fetchIngredientsFromAIFallback(q) }
@@ -2771,6 +2830,49 @@ async function handleResolveProducts(req, res) {
     scoreGap: result.product?.scoreGap ?? (result.candidates?.[0]?.scoreGap ?? 0)
   });
 
+  sendJson(res, 200, result);
+}
+
+async function handleResolveProductsFast(req, res) {
+  const started = Date.now();
+  const body = await readBody(req);
+  const query = String(body.query || '').trim();
+  const region = body.region || '';
+  const locale = body.locale || '';
+  if (!query) {
+    sendJson(res, 400, { error: 'query_required' });
+    return;
+  }
+
+  const timeoutGuard = new Promise(resolve => {
+    setTimeout(() => {
+      resolve({
+        state: 'candidate_list',
+        decisionReason: 'timeout',
+        autoResolved: false,
+        normalized_query: normalizeText(query),
+        candidates: [],
+        latencyMs: Date.now() - started
+      });
+    }, FAST_SEARCH_BUDGET_MS);
+  });
+
+  let result = await Promise.race([
+    resolveProductWithFallback(query, region, locale),
+    timeoutGuard
+  ]);
+  if (typeof result.autoResolved !== 'boolean') result.autoResolved = false;
+  if (!result.decisionReason) result.decisionReason = 'ambiguous';
+  if (result.state === 'candidate_list' && !Array.isArray(result.candidates)) result.candidates = [];
+  result.latencyMs = Date.now() - started;
+
+  pushMetric('search_fast_resolved', {
+    query: result.normalized_query || normalizeText(query),
+    state: result.state,
+    decisionReason: result.decisionReason,
+    autoResolved: !!result.autoResolved,
+    latencyMs: result.latencyMs
+  });
   sendJson(res, 200, result);
 }
 
@@ -3181,6 +3283,7 @@ function handleCoverageMetrics(_req, res) {
   const ingestionJobs = readIngestionJobs();
   const index = readIndex();
   const catalog = readCatalog();
+  const promotion = readJson(PROMOTION_REPORT_PATH, { promotedAliases: [] });
   const unknown = readJson(UNKNOWN_QUEUE_PATH, { items: [] });
   const proposals = readIngredientProposals();
   const canonicalIndex = readCanonicalIngredientIndex();
@@ -3260,7 +3363,17 @@ function handleCoverageMetrics(_req, res) {
       ingredientResolveSucceeded24h: enrichSucceeded,
       ingredientResolveFailed24h: enrichFailed,
       ingredientResolveSuccessRate24h: enrichStarted ? Number((enrichSucceeded / enrichStarted).toFixed(4)) : 1
-    } : null
+    } : null,
+    coverage: {
+      unknownBrandRate: Number(unknownBrandRate.toFixed(4)),
+      top1BrandMatchRate: Number(top1BrandMatchRate.toFixed(4)),
+      catalogSize: Number(catalog.products.length || 0),
+      aliasPromotionCount: Number(
+        Array.isArray(promotion.promotedAliases)
+          ? promotion.promotedAliases.length
+          : (Array.isArray(promotion.items) ? promotion.items.length : 0)
+      )
+    }
   };
   if (!contractCheck.ok) payload.error = 'contract_check_failed';
   sendJson(res, 200, payload);
@@ -3316,6 +3429,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && url.pathname === '/resolver/products') {
       await handleResolveProducts(req, res);
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/resolver/products/fast') {
+      await handleResolveProductsFast(req, res);
       return;
     }
 
@@ -3403,6 +3521,7 @@ const server = http.createServer(async (req, res) => {
         endpoints: [
           '/healthz',
           '/resolver/products',
+          '/resolver/products/fast',
           '/resolver/coverage-metrics',
           '/resolver/smoke-check',
           '/resolver/feedback/candidate-selection',

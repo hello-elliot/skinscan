@@ -26,6 +26,7 @@ Optional env:
 - `AUTO_RESOLVE_ENABLED=true|false` (if `false`, only strict exact-high matches auto-resolve)
 - `STRICT_BRAND_GATE_ENABLED=true|false` (if `true`, stricter brand-confidence gating before medium/high resolution)
 - `INGESTION_POLL_INTERVAL_MS` (default `30000`; background cadence for queued add-product ingestion jobs)
+- `FAST_SEARCH_BUDGET_MS` (default `1500`; timeout budget for `/resolver/products/fast`)
 
 ## Daily Enrichment Job
 
@@ -65,6 +66,30 @@ CosIng import discovery:
 - filename must include `cosing` and extension `.csv`, `.tsv`, or `.txt`
 
 ## API
+
+### `POST /resolver/products/fast`
+
+Fast typeahead endpoint for search suggestions only.
+It does **not** start ingredient enrichment jobs and returns quickly with `latencyMs`.
+
+Input:
+
+```json
+{ "query": "sunday riley vitamin c cream", "locale": "en-US", "region": "US" }
+```
+
+Output:
+
+```json
+{
+  "state": "candidate_list",
+  "decisionReason": "unknown_brand",
+  "autoResolved": false,
+  "candidates": [],
+  "normalized_query": "sunday riley vitamin c cream",
+  "latencyMs": 482
+}
+```
 
 ### `POST /resolver/products`
 
@@ -223,6 +248,11 @@ Actions: `approve`, `reject`, `approve_provisional`.
 ### `GET /resolver/coverage-metrics`
 
 Returns index stats, miss queue, contract smoke status, and 24h resolver KPI snapshot.
+Also includes `coverage` summary:
+- `unknownBrandRate`
+- `top1BrandMatchRate`
+- `catalogSize`
+- `aliasPromotionCount`
 If contract fields are missing (`decisionReason` / `autoResolved`), KPI output is blocked (`kpi: null`).
 
 ### `POST /resolver/ingredients/ingest-cosing`

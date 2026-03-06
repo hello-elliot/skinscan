@@ -1365,7 +1365,7 @@ async function submitAddProduct() {
 async function triggerSuggest(query) {
   const requestId = ++latestSuggestRequestId;
   setSearchState('searching', { query });
-  const resolution = await resolveProduct(query, { includeWebFallback: true, forSuggest: true });
+  const resolution = await resolveProduct(query, { includeWebFallback: false, forSuggest: true });
   if (requestId !== latestSuggestRequestId || productInput.value.trim() !== query.trim()) return;
   if (resolution.state === 'error') {
     setSearchState('error', { query });
@@ -1793,15 +1793,23 @@ async function resolveProductLocal(query, options = {}) {
   if (classified.state === 'not_found' && !hadAnySuccess) return { state: 'error', normalizedQuery: correctedQuery, appliedFuzzyCorrection: usedFuzzy };
   return { ...classified, normalizedQuery: correctedQuery, appliedFuzzyCorrection: usedFuzzy };
 }
-async function resolveProductFromBackend(query) {
+async function resolveProductFromBackend(query, options = {}) {
   try {
     const locale = (navigator.language || 'en-US');
     const region = (locale.split('-')[1] || '').toUpperCase();
-    const res = await fetch(resolverUrl('/resolver/products'), {
+    const endpoint = options.fast ? '/resolver/products/fast' : '/resolver/products';
+    let res = await fetch(resolverUrl(endpoint), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, locale, region })
     });
+    if (!res.ok && options.fast) {
+      res = await fetch(resolverUrl('/resolver/products'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, locale, region })
+      });
+    }
     if (!res.ok) return null;
     const data = await res.json();
     if (!data || !data.state) return null;
@@ -1813,7 +1821,8 @@ async function resolveProductFromBackend(query) {
       autoResolved: !!data.autoResolved,
       ingredientResolutionState: data.ingredientResolutionState || '',
       ingredientJobId: data.ingredientJobId || '',
-      ingredientFailureStage: data.ingredientFailureStage || ''
+      ingredientFailureStage: data.ingredientFailureStage || '',
+      latencyMs: Number(data.latencyMs || 0)
     };
     if (data.product) mapped.product = mapBackendProduct(data.product);
     if (Array.isArray(data.candidates)) mapped.candidates = data.candidates.map(mapBackendProduct).filter(Boolean);
@@ -1823,8 +1832,9 @@ async function resolveProductFromBackend(query) {
   }
 }
 async function resolveProduct(query, options = {}) {
-  const backend = await resolveProductFromBackend(query);
+  const backend = await resolveProductFromBackend(query, { fast: !!options.forSuggest });
   if (backend && backend.state && backend.state !== 'error') {
+    if (options.forSuggest) return backend;
     const backendLowSignal = (
       backend.state === 'not_found'
       || (backend.state === 'candidate_list' && (
