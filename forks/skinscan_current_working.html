@@ -2214,18 +2214,21 @@ function claudeIngredientCheck(ingredients, skinTypes) {
   const matchTypeCounts = { exact: 0, synonym: 0, family: 0, generic_extract: 0, unknown: 0 };
 
   // Reason helpers
-  const acneReason = (d) => {
-    if (d.acne >= 5) return 'highly comedogenic (Fulton scale 5)';
-    if (d.acne === 4) return 'comedogenic (Fulton scale 4)';
-    if (d.acne === 3) return 'moderately comedogenic (Fulton scale 3)';
-    return 'mildly comedogenic (Fulton scale 2)';
+  const acneReason = (d, positionFrac) => {
+    const posNote = positionFrac <= 0.25 ? 'higher-list placement' : positionFrac <= 0.5 ? 'mid-list placement' : 'lower-list placement';
+    if (d.acne >= 5) return `high comedogenic signal (${posNote})`;
+    if (d.acne === 4) return `moderate-high comedogenic signal (${posNote})`;
+    if (d.acne === 3) return `moderate comedogenic signal (${posNote})`;
+    return `mild comedogenic signal (${posNote})`;
   };
   const occlusiveNote = (d) => d.func && (d.func.includes('occlusive') || d.func.includes('wax'))
     ? ' / heavy occlusive' : '';
 
-  for (const ing of ingredients) {
+  for (let i = 0; i < ingredients.length; i += 1) {
+    const ing = ingredients[i];
     const resolved = resolveIngredient(ing);
     const d = resolved.data;
+    const positionFrac = ingredients.length ? (i + 1) / ingredients.length : 1;
     const matchType = resolved.matchType || 'unknown';
     if (matchTypeCounts[matchType] !== undefined) matchTypeCounts[matchType] += 1;
     if (!d) {
@@ -2234,26 +2237,28 @@ function claudeIngredientCheck(ingredients, skinTypes) {
     }
 
     // Acne-prone
-    if (skinTypes.includes('acne-prone') && d.acne >= 2) {
+    if (skinTypes.includes('acne-prone') && (d.acne >= 3 || (d.acne === 2 && positionFrac <= 0.33))) {
       const sev = d.acne >= 4 ? 'high' : d.acne === 3 ? 'mid' : 'low';
       acne.push({
         name: ing,
         severity: sev,
         acneVal: d.acne,
-        reason: acneReason(d) + occlusiveNote(d)
+        positionFrac,
+        reason: acneReason(d, positionFrac) + occlusiveNote(d)
       });
     } else if (skinTypes.includes('acne-prone') && d.func && d.acne >= 1 &&
                (d.func.includes('occlusive') || d.func.includes('wax'))) {
       // Only flag occlusives/waxes that have some comedogenic signal (acne>=1)
       // Petrolatum, mineral oil, silicones (acne=0) are non-comedogenic — not shown
-      acne.push({ name: ing, severity: 'low', acneVal: d.acne, reason: 'mildly comedogenic wax — Fulton scale 1' });
+      acne.push({ name: ing, severity: 'low', acneVal: d.acne, positionFrac, reason: 'occlusive wax with low comedogenic signal' });
     }
-    if (d.acne >= 3) {
+    if (d.acne >= 4 || (d.acne === 3 && positionFrac <= 0.33)) {
       normalAcne.push({
         name: ing,
         severity: d.acne >= 4 ? 'high' : 'mid',
         acneVal: d.acne,
-        reason: d.acne >= 4 ? 'higher comedogenic signal for general skin' : 'moderate comedogenic signal for general skin'
+        positionFrac,
+        reason: d.acne >= 4 ? 'higher comedogenic signal for general skin' : 'moderate comedogenic signal (higher-list ingredient)'
       });
     }
 
@@ -2723,19 +2728,21 @@ function acneSafetyScore(flagged) {
   let burden = 0;
   for (const f of flagged) {
     const a = f.acneVal || 0;  // raw Fulton value attached at flag-time
-    // Fulton-style comedogenicity is a weak predictor in modern real-world use;
-    // keep as one signal, but avoid heavy penalty from this dimension alone.
-    if (a >= 5)      burden += 1.25;
-    else if (a === 4) burden += 0.8;
-    else if (a === 3) burden += 0.4;
-    else if (a === 2) burden += 0.2;  // mildly comedogenic
+    const pos = Number.isFinite(f.positionFrac) ? f.positionFrac : 1;
+    const positionWeight = pos <= 0.25 ? 1.0 : pos <= 0.5 ? 0.7 : 0.45;
+    // Comedogenicity tables are legacy/ingredient-only signals; treat as weak
+    // unless signal is high and likely present at meaningful concentration.
+    if (a >= 5)      burden += 1.0 * positionWeight;
+    else if (a === 4) burden += 0.7 * positionWeight;
+    else if (a === 3) burden += 0.35 * positionWeight;
+    else if (a === 2) burden += 0.15 * positionWeight;
     // acne=1: shown in list as informational, no burden (Fulton 1 = clinically negligible)
     // occlusive/wax acne=0: no burden, flagged via separate branch in claudeIngredientCheck
   }
-  if (burden < 0.35) return 5;
-  if (burden < 0.9) return 4;
-  if (burden < 1.7) return 3;
-  if (burden < 2.5) return 2;
+  if (burden < 0.3) return 5;
+  if (burden < 0.8) return 4;
+  if (burden < 1.5) return 3;
+  if (burden < 2.2) return 2;
   return 1;
 }
 
