@@ -765,6 +765,8 @@ function normalizeIngredientText(raw) {
   if (!raw) return '';
   const scrubbed = String(raw)
     .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/read all the geeky details about[^,\n]+here\s*>>?/ig, ' ')
+    .replace(/learn more about[^,\n]+here\s*>>?/ig, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/ingredients?\s*[:\-]/ig, ' ')
     .replace(/\(and\)/ig, ',')

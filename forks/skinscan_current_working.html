@@ -2598,7 +2598,9 @@ function parseIngredients(text) {
 
   // Expand "A AND B" tokens into separate ingredients
   const expanded = [];
+  const junkPattern = /(read all the geeky details|learn more|click here|ingredients explained|what it does|how to use|here\s*>>?)/i;
   for (const token of tokens) {
+    if (!token || junkPattern.test(token)) continue;
     const andMatch = token.match(/^([A-Z][A-Z0-9\-\/\(\)\s]{2,}?)\s+AND\s+([A-Z][A-Z0-9\-\/\(\)\s]{2,})$/);
     if (andMatch) {
       expanded.push(andMatch[1].trim(), andMatch[2].trim());
@@ -2606,7 +2608,7 @@ function parseIngredients(text) {
       expanded.push(token);
     }
   }
-  return expanded;
+  return [...new Set(expanded)];
 }
 
 function loadUnknownQueue() {
@@ -2673,13 +2675,18 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
     // ── DB lookup — instant, no API call ──
     const aiFlags = claudeIngredientCheck(ingredients, skinTypes);
 
+    const unknownIngredients = (aiFlags._unknown || []).filter(u => {
+      if (!u) return false;
+      if (/(read all the geeky details|learn more|click here|ingredients explained|here\s*>>?)/i.test(String(u))) return false;
+      const resolved = resolveIngredient(u);
+      return !resolved?.data;
+    });
     const cats = buildCats(skinTypes, profileMode, aiFlags);
-    const unknownCount = (aiFlags._unknown || []).length;
+    const unknownCount = unknownIngredients.length;
     const overall = cats.length ? overallScore(cats, unknownCount, ingredients.length) : 5;
     const verdict = verdictFromScore(overall);
 
     lastAnalysisData = { productName, brand, ingredientsText, source, resultImage, resultCategory };
-    const unknownIngredients = aiFlags._unknown || [];
     logUnknownIngredients(unknownIngredients, source);
     trackEvent('ingredient_match_type_count', aiFlags._matchTypeCounts || {});
     const { label: confLabel, pct: confPct } = coverageConfidence(ingredients.length, unknownCount);
