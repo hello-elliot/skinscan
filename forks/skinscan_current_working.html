@@ -814,6 +814,7 @@ let searchState = 'idle';
 let lastSuggestionMeta = null;
 let addProductState = 'add_idle';
 let addProductPollToken = 0;
+const prefetchedIngredientProductIds = new Set();
 const productInput = document.getElementById('productInput');
 
 // SearchState: 'idle' | 'searching' | 'results' | 'empty' | 'error' | 'unknown_brand_no_candidates'
@@ -1860,13 +1861,9 @@ async function triggerSuggest(query) {
       setSearchState('results', { query });
       return;
     }
-    showCandidateStatusMessage('No close match yet. Add a product URL below for fast indexing.');
-    showAddProductCapture({
-      query,
-      normalizedQuery: resolution.normalizedQuery || normalizeQuery(query),
-      decisionReason: 'unknown_brand'
-    });
-    setSearchState('unknown_brand_no_candidates', { query });
+    showCandidateStatusMessage('No close match yet. Keep typing or press Analyze to add product URL.');
+    hideAddProductCapture();
+    setSearchState('empty', { query });
     return;
   }
   if (resolution.state === 'candidate_list' && resolution.candidates?.length) {
@@ -2037,23 +2034,44 @@ function showSuggestions(products, options = {}) {
   suggestionsEl.innerHTML = normalized.map((p, i) => {
     const badgeText = confirmMode && i === 0 ? 'Confirm this product?' : (p.confidence || 'low').toUpperCase();
     const badgeTone = confirmMode && i === 0 ? 'inci' : (p.confidence === 'high' ? 'obf' : 'inci');
+    const statusText = p.ingredientsStatus === 'available' ? 'Ready to analyze' : 'Tap to analyze (fetches ingredients)';
     return `
       <div class="sug-item" onclick="pickProduct(${i})">
         ${p.img ? `<img class="sug-thumb" src="${escHtml(p.img)}" alt="" onerror="this.style.display='none'">` : `<div class="sug-thumb-empty">◈</div>`}
         <div class="sug-info">
           <div class="sug-name">${escHtml([p.brand, p.name].filter(Boolean).join(' — ') || p.name || p.brand || 'Product')}</div>
           ${p.category ? `<div class="sug-brand">${escHtml(p.category)}</div>` : ''}
-          <div class="sug-brand">${p.ingredientsStatus === 'available' ? 'Ingredients available' : 'Ingredients not available yet'}</div>
+          <div class="sug-brand">${escHtml(statusText)}</div>
         </div>
         <span class="sug-badge ${badgeTone}">${badgeText}</span>
       </div>`;
   }).join('');
   suggestionsEl.classList.add('show');
-  if (options.meta?.decisionReason === 'unknown_brand') {
+  if (options.meta?.decisionReason === 'unknown_brand' && options.meta?.selectionContext === 'search') {
     showAddProductCapture(options.meta || {});
   } else {
     hideAddProductCapture();
   }
+  prefetchSuggestionIngredients(normalized.slice(0, 2));
+}
+
+function prefetchSuggestionIngredients(products = []) {
+  products.forEach(p => {
+    if (!p?.productId || p.ingredientsStatus === 'available') return;
+    if (prefetchedIngredientProductIds.has(p.productId)) return;
+    prefetchedIngredientProductIds.add(p.productId);
+    fetch(resolverUrl('/resolver/enrich-ingredients'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        productId: p.productId,
+        query: [p.brand, p.name].filter(Boolean).join(' ').trim(),
+        forceRetry: false,
+        locale: navigator.language || 'en-US',
+        region: ((navigator.language || 'en-US').split('-')[1] || '').toUpperCase()
+      })
+    }).catch(() => {});
+  });
 }
 async function pickProduct(i) {
   const p = suggestionsEl._products[i];
