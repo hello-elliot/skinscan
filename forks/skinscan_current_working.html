@@ -1678,10 +1678,15 @@ function cleanCandidateText(v, max = 180) {
 }
 function mapBackendProduct(p) {
   if (!p) return null;
+  const rawBrand = cleanCandidateText(p.brand || '', 80);
+  let rawName = cleanCandidateText(p.name || '', 180);
+  if (rawBrand && rawName.toLowerCase().startsWith(rawBrand.toLowerCase() + ' ')) {
+    rawName = rawName.slice(rawBrand.length).trim();
+  }
   return {
     productId: p.productId || '',
-    name: cleanCandidateText(p.name || '', 180),
-    brand: cleanCandidateText(p.brand || '', 80),
+    name: rawName,
+    brand: rawBrand,
     category: cleanCandidateText(p.category || p.line || '', 100),
     img: p.imageUrl || '',
     ingredientsText: p.ingredientsText || '',

@@ -1652,6 +1652,20 @@ function slugToTitle(slug = '') {
     .join(' ');
 }
 
+function splitBrandAndName(rawName = '', inferredBrand = '') {
+  const name = String(rawName || '').trim();
+  const brand = String(inferredBrand || '').trim();
+  if (!name) return { brand, name };
+  if (!brand) return { brand: '', name };
+  const lowerName = name.toLowerCase();
+  const lowerBrand = brand.toLowerCase();
+  if (lowerName.startsWith(lowerBrand + ' ')) {
+    const stripped = name.slice(brand.length).trim();
+    if (stripped.length >= 3) return { brand, name: stripped };
+  }
+  return { brand, name };
+}
+
 async function fetchProductCandidatesFromIncidecoder(query) {
   const cacheKey = `inci-candidates:${normalizeText(query)}`;
   const cached = getSourceCache(cacheKey);
@@ -1664,14 +1678,17 @@ async function fetchProductCandidatesFromIncidecoder(query) {
     .filter(x => x.slug && x.title);
 
   const products = links.slice(0, 16).map(({ slug, title }) => {
-    const name = title || slugToTitle(slug);
-    const inferredBrand = String(name || '').split(/\s+/).slice(0, 2).join(' ').trim();
+    const rawName = title || slugToTitle(slug);
+    const inferredBrand = String(rawName || '').split(/\s+/).slice(0, 2).join(' ').trim();
+    const split = splitBrandAndName(rawName, inferredBrand);
+    const brand = split.brand || inferredBrand;
+    const name = split.name || rawName;
     return asCatalogProduct({
-      product_id: slugifyProductId(inferredBrand || 'incidecoder', name),
-      brand_canonical: inferredBrand || '',
+      product_id: slugifyProductId(brand || 'incidecoder', name),
+      brand_canonical: brand || '',
       name_canonical: name,
       name_aliases: [normalizeText(name), normalizeText(slug.replace(/-/g, ' '))],
-      brand_aliases: inferredBrand ? [normalizeText(inferredBrand)] : [],
+      brand_aliases: brand ? [normalizeText(brand)] : [],
       line: '',
       category: '',
       image_url: '',
@@ -1709,10 +1726,37 @@ function extractJsonLdIngredients(text) {
   return null;
 }
 
-function extractIngredientBlockFromHtml(text) {
+function extractIngredientBlockFromHtml(text, sourceUrl = '') {
   if (!text) return null;
   const jsonLd = extractJsonLdIngredients(text);
   if (jsonLd) return jsonLd;
+
+  const src = String(sourceUrl || '').toLowerCase();
+  const isInciDecoder = src.includes('incidecoder.com');
+
+  // Incidecoder pages often embed INCI in JS payloads rather than visible markup.
+  if (isInciDecoder) {
+    const inciJsonPatterns = [
+      /"inci"\s*:\s*"([^"]{80,12000})"/i,
+      /"ingredient_list"\s*:\s*"([^"]{80,12000})"/i,
+      /"ingredients_text"\s*:\s*"([^"]{80,12000})"/i
+    ];
+    for (const pattern of inciJsonPatterns) {
+      const m = String(text).match(pattern);
+      if (!m || !m[1]) continue;
+      const candidate = normalizeIngredientText(decodeHtmlEntities(m[1]).replace(/\\"/g, '"').replace(/\\n/g, ' ').replace(/\\u003c[^>]*\\u003e/g, ' '));
+      const quality = scoreIngredientCandidate(candidate);
+      if (quality.valid) return { ingredientsText: candidate, confidence: quality.confidence };
+    }
+
+    const quotedArrayMatch = String(text).match(/"ingredient_names"\s*:\s*\[([\s\S]{80,12000}?)\]/i);
+    if (quotedArrayMatch && quotedArrayMatch[1]) {
+      const tokens = [...quotedArrayMatch[1].matchAll(/"([^"]{2,220})"/g)].map(m => m[1]).filter(Boolean);
+      const candidate = normalizeIngredientText(tokens.join(', '));
+      const quality = scoreIngredientCandidate(candidate);
+      if (quality.valid) return { ingredientsText: candidate, confidence: quality.confidence };
+    }
+  }
 
   const jsonLikePatterns = [
     /"ingredients"\s*:\s*"([^"]{80,5000})"/i,
@@ -2213,7 +2257,7 @@ async function fetchIngredientsFromProfileUrls(productId, kind, explicitUrls = [
     if (cached) return cached;
 
     const text = await fetchTextWithTimeout(url, SOURCE_TIMEOUT_MS);
-    const parsed = extractIngredientBlockFromHtml(text);
+    const parsed = extractIngredientBlockFromHtml(text, url);
     if (!parsed) continue;
 
     const payload = {
