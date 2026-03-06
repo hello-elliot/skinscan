@@ -22,6 +22,7 @@
   header { padding: 20px 20px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1.5px solid rgba(26,20,16,0.1); }
   /* Logo group: always a vertical stack — title on top, subtitle directly below */
   .logo-group { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
+  .logo-group.clickable { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   .logo { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 21px; letter-spacing: -0.5px; color: var(--terra); line-height: 1.1; }
   .logo-sub { font-size: 10.5px; font-weight: 400; color: rgba(26,20,16,0.38); letter-spacing: 0.1em; text-transform: uppercase; line-height: 1; white-space: nowrap; }
   .db-tag { font-size: 10px; color: rgba(26,20,16,0.3); background: rgba(26,20,16,0.05); border: 1px solid rgba(26,20,16,0.08); border-radius: 20px; padding: 3px 9px; white-space: nowrap; flex-shrink: 0; }
@@ -281,7 +282,7 @@
 <body>
 
 <header>
-  <div class="logo-group">
+  <div class="logo-group clickable" onclick="resetScan()" title="Go to home">
     <span class="logo">SkinScan</span>
     <span class="logo-sub">Ingredient Analyzer</span>
   </div>
@@ -2008,6 +2009,26 @@ async function showProductNeedsIngredients(product, options = {}) {
       return;
     }
   }
+  // Simple direct fallback: query INCI by product name before giving up.
+  const inciQuery = [product?.brand, product?.name].filter(Boolean).join(' ').trim() || String(product?.name || '').trim();
+  if (inciQuery) {
+    const inci = await fetchInciIngredients(inciQuery, true);
+    if (inci?.ingredients) {
+      const enriched = {
+        ...product,
+        name: inci.productName || product.name,
+        brand: inci.brand || product.brand || '',
+        ingredientsText: inci.ingredients,
+        ingredientsStatus: 'available'
+      };
+      if (enriched.productId && enriched.ingredientsText) {
+        await persistResolvedIngredients(enriched, 'inci-direct');
+      }
+      trackEvent('analysis_autostart_after_enrichment', { productId: enriched.productId || '', name: enriched.name || product.name || '' });
+      await runAnalysis(enriched.name || product.name, enriched.brand || product.brand || '', enriched.ingredientsText, 'resolver', enriched.img || product.img || '', enriched.category || product.category || '');
+      return;
+    }
+  }
   document.getElementById('loading').classList.remove('show');
   document.getElementById('results').innerHTML = `
     <div class="not-found">
@@ -2143,6 +2164,23 @@ async function pickProduct(i) {
     sendSelectionFeedback(true, true);
     trackEvent('product_confirmation_accepted', { name: enriched.name || p.name });
     await runAnalysis(enriched.name || p.name, enriched.brand || p.brand || '', enriched.ingredientsText, 'resolver', enriched.img || p.img || '', enriched.category || p.category || '');
+    return;
+  }
+  const inciDirect = await fetchInciIngredients([p.brand, p.name].filter(Boolean).join(' ').trim() || p.name, true);
+  if (inciDirect?.ingredients) {
+    const directEnriched = {
+      ...p,
+      name: inciDirect.productName || p.name,
+      brand: inciDirect.brand || p.brand || '',
+      ingredientsText: inciDirect.ingredients,
+      ingredientsStatus: 'available'
+    };
+    if (directEnriched.productId && directEnriched.ingredientsText) {
+      await persistResolvedIngredients(directEnriched, 'inci-direct');
+    }
+    sendSelectionFeedback(true, true);
+    trackEvent('product_confirmation_accepted', { name: directEnriched.name || p.name, source: 'inci_direct' });
+    await runAnalysis(directEnriched.name || p.name, directEnriched.brand || p.brand || '', directEnriched.ingredientsText, 'resolver', directEnriched.img || p.img || '', directEnriched.category || p.category || '');
     return;
   }
   sendSelectionFeedback(false, false);
