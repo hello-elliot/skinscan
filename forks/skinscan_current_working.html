@@ -2327,12 +2327,18 @@ function claudeIngredientCheck(ingredients, skinTypes) {
 
 // ── Chemist's note: deterministic local summary (no paid API calls) ──
 async function getChemistNote(productName, ingredients, verdict, skinTypes, aiFlags) {
+  const localSkinLabels = {
+    'acne-prone': 'Acne-prone',
+    sensitive: 'Sensitive / Reactive',
+    dry: 'Dry',
+    normal: 'Normal'
+  };
   const acneCount = (aiFlags?.acne || []).length;
   const sensitiveCount = (aiFlags?.sensitive || []).length;
   const dryCount = (aiFlags?.dry || []).length;
   const allergenCount = (aiFlags?.allergens || []).length;
   const totalSignals = acneCount + sensitiveCount + dryCount + allergenCount;
-  const skinLabel = skinTypes.length ? skinTypes.map(t => skinLabels[t] || t).join(', ') : 'general skin';
+  const skinLabel = skinTypes.length ? skinTypes.map(t => localSkinLabels[t] || t).join(', ') : 'general skin';
 
   if (verdict === 'safe') {
     if (totalSignals === 0) return `For ${skinLabel}, this formula looks broadly compatible with low flagged risk from the mapped ingredients. Keep patch testing if your skin is highly reactive.`;
@@ -2680,7 +2686,7 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
     const { label: confLabel, pct: confPct } = coverageConfidence(ingredients.length, unknownCount);
     renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes, noSkinWarning, profileMode, dataSource: 'db', unknownIngredients, aiFlags, confLabel, confPct, resultImage, resultCategory });
 
-    // Chemist's note — short narrative (only Claude API call remaining)
+    // Chemist's note — local deterministic summary
     getChemistNote(productName, ingredients, verdict, skinTypes, aiFlags).then(text => {
       const el = document.getElementById('aiText');
       if (!el) return;
@@ -2689,6 +2695,10 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
       } else {
         el.innerHTML = '<span style="font-size:12px;color:rgba(26,20,16,0.28);font-style:italic">Note unavailable.</span>';
       }
+    }).catch(() => {
+      const el = document.getElementById('aiText');
+      if (!el) return;
+      el.innerHTML = '<span style="font-size:12px;color:rgba(26,20,16,0.28);font-style:italic">Note unavailable.</span>';
     });
   } catch(err) {
     console.error('[runAnalysis]', err);
