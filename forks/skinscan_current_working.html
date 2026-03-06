@@ -2185,9 +2185,9 @@ function overallScore(cats, unknownCount, totalIngredients) {
   const weighted = cats.reduce((sum, c) => sum + c.score * c.weight, 0);
   const totalW   = cats.reduce((sum, c) => sum + c.weight, 0);
   const avg = parseFloat((weighted / totalW).toFixed(1));
-  // Floor: overall can't exceed the worst category by more than 1 point
+  // Floor: avoid one category fully dominating the entire verdict.
   const minCat = Math.min(...cats.map(c => c.score));
-  let score = Math.min(avg, minCat + 1);
+  let score = Math.min(avg, minCat + 1.5);
   const uncappedScore = score;
   // Coverage cap: incomplete analysis limits maximum confidence
   const { cap } = coverageConfidence(totalIngredients || 0, unknownCount || 0);
@@ -2723,17 +2723,19 @@ function acneSafetyScore(flagged) {
   let burden = 0;
   for (const f of flagged) {
     const a = f.acneVal || 0;  // raw Fulton value attached at flag-time
-    if (a >= 5)      burden += 3.0;
-    else if (a === 4) burden += 2.0;
-    else if (a === 3) burden += 1.0;
-    else if (a === 2) burden += 0.6;  // mildly comedogenic
+    // Fulton-style comedogenicity is a weak predictor in modern real-world use;
+    // keep as one signal, but avoid heavy penalty from this dimension alone.
+    if (a >= 5)      burden += 1.25;
+    else if (a === 4) burden += 0.8;
+    else if (a === 3) burden += 0.4;
+    else if (a === 2) burden += 0.2;  // mildly comedogenic
     // acne=1: shown in list as informational, no burden (Fulton 1 = clinically negligible)
     // occlusive/wax acne=0: no burden, flagged via separate branch in claudeIngredientCheck
   }
-  if (burden < 0.5) return 5;
-  if (burden < 1.0) return 4;
-  if (burden < 2.0) return 3;
-  if (burden < 3.0) return 2;
+  if (burden < 0.35) return 5;
+  if (burden < 0.9) return 4;
+  if (burden < 1.7) return 3;
+  if (burden < 2.5) return 2;
   return 1;
 }
 
@@ -2760,12 +2762,12 @@ function buildCats(skinTypes, profileMode, aiFlags) {
     const f = get('acne');
     cats.push({ key:'acne', name:'Pore-clogging & heavy',
       desc: f.length === 0 ? 'No pore-clogging or occlusive ingredients found.' : null,
-      flagged: f, score: acneSafetyScore(f), weight: 1.5 });
+      flagged: f, score: acneSafetyScore(f), weight: 0.95 });
   } else if (normalOnly) {
     const f = get('normalAcne');
     cats.push({ key:'acne', name:'Balanced pore-clogging risk',
       desc: f.length === 0 ? 'No moderate/high comedogenic signals detected.' : null,
-      flagged: f, score: acneSafetyScore(f), weight: 1.0 });
+      flagged: f, score: acneSafetyScore(f), weight: 0.7 });
   }
 
   if (skinTypes.includes('sensitive')) {
@@ -3037,7 +3039,7 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
       <button class="new-scan" style="flex:1" onclick="reAnalyze()" title="Re-run with current skin type selection">↺ Re-run with skin settings</button>
     </div>
     <div style="font-size:10.5px;color:rgba(26,20,16,0.25);line-height:1.6;margin-top:14px;text-align:center;padding:0 4px">
-      2,200+ ingredient database (K/J/C-beauty expanded). Comedogenicity (Fulton scale). EU allergens per Regulation 1223/2009.
+      2,200+ ingredient database (K/J/C-beauty expanded). Comedogenicity (Fulton-style directional signal). EU allergens per Regulation 1223/2009.
       Unknown ingredients shown above with search links. Not a substitute for dermatological advice.
     </div>
   `;
