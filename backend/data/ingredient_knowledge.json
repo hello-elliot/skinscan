@@ -407,6 +407,22 @@
       "al": 0,
       "safe": true,
       "func": "emollient"
+    },
+    "BETULA ALBA JUICE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "botanical humectant/soothing"
+    },
+    "PENTAERYTHRITYL TETRAETHYLHEXANOATE": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient"
     }
   },
   "synonyms": {
@@ -449,7 +465,11 @@
     "ISOAMYL LAURATE": "ISOAMYL LAURATE",
     "DEXTRIN PALMITATE": "DEXTRIN PALMITATE",
     "COFFEE BUTTER": "COFFEE BUTTER",
-    "COFFEA ARABICA SEED BUTTER": "COFFEA ARABICA SEED BUTTER"
+    "COFFEA ARABICA SEED BUTTER": "COFFEA ARABICA SEED BUTTER",
+    "GLYCERINE": "GLYCERIN",
+    "BETULA ALBA JUICE (10000 PPM)": "BETULA ALBA JUICE",
+    "BETULA ALBA JUICE": "BETULA ALBA JUICE",
+    "PENTAERYTHRITYL TETRAETHYLHEXANOATE": "PENTAERYTHRITYL TETRAETHYLHEXANOATE"
   },
   "family_rules": [
     {
