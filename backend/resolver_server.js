@@ -1437,18 +1437,86 @@ async function fetchCandidatesFromConnectors(query) {
   return [...dedup.values()];
 }
 
+function resolveFromConnectorCandidates(query, candidates = [], region = '', locale = '') {
+  const normalized = normalizeText(query);
+  const ranked = (candidates || [])
+    .map(item => ensureProductSchema(item))
+    .map(product => {
+      const scoring = scoreProduct(normalized, product, null);
+      return toResolvedProduct(product, scoring, 'low');
+    })
+    .filter(r => Number(r.score || 0) >= 0.2)
+    .sort((a, b) => b.score - a.score);
+
+  if (!ranked.length) {
+    return {
+      state: 'candidate_list',
+      decisionReason: 'unknown_brand',
+      autoResolved: false,
+      candidates: [],
+      normalized_query: normalized,
+      applied_corrections: [],
+      brand_hint: '',
+      autoResolveEnabled: AUTO_RESOLVE_ENABLED,
+      strictBrandGateEnabled: STRICT_BRAND_GATE_ENABLED,
+      region: region || '',
+      locale: locale || ''
+    };
+  }
+
+  const withGaps = annotateScoreGaps(ranked).slice(0, 7);
+  const top = withGaps[0];
+  const highEnough = top && top.score >= 0.9 && top.nameSimilarity >= 0.88 && top.scoreGap >= 0.15;
+  if (highEnough) {
+    return {
+      state: 'resolved_medium',
+      decisionReason: 'ambiguous',
+      autoResolved: false,
+      product: { ...top, confidence: 'medium', needsConfirmation: true },
+      normalized_query: normalized,
+      applied_corrections: [],
+      brand_hint: '',
+      autoResolveEnabled: AUTO_RESOLVE_ENABLED,
+      strictBrandGateEnabled: STRICT_BRAND_GATE_ENABLED,
+      region: region || '',
+      locale: locale || ''
+    };
+  }
+
+  return {
+    ...asCandidateList(withGaps, 'ambiguous'),
+    normalized_query: normalized,
+    applied_corrections: [],
+    brand_hint: '',
+    autoResolveEnabled: AUTO_RESOLVE_ENABLED,
+    strictBrandGateEnabled: STRICT_BRAND_GATE_ENABLED,
+    region: region || '',
+    locale: locale || ''
+  };
+}
+
 async function resolveProductWithFallback(query, region, locale) {
   let result = resolveAgainstCatalog(query, region, locale);
   if (result.state === 'resolved_high') return result;
 
+  let connectorCandidates = [];
   const topScore = result.product?.score || result.candidates?.[0]?.score || 0;
   const lowTrustDecision = ['unknown_brand', 'brand_mismatch'].includes(result.decisionReason);
   if (result.state === 'not_found' || topScore < 0.72 || lowTrustDecision) {
-    const candidates = await fetchCandidatesFromConnectors(result.normalized_query || query);
-    if (candidates.length) {
-      upsertCatalogProducts(candidates);
+    connectorCandidates = await fetchCandidatesFromConnectors(result.normalized_query || query);
+    if (connectorCandidates.length) {
+      upsertCatalogProducts(connectorCandidates);
       result = resolveAgainstCatalog(query, region, locale);
     }
+  }
+
+  const stillWeak = (
+    result.state === 'candidate_list'
+    && result.decisionReason === 'unknown_brand'
+    && (!Array.isArray(result.candidates) || result.candidates.length === 0)
+  );
+  if (stillWeak && connectorCandidates.length) {
+    return resolveFromConnectorCandidates(query, connectorCandidates, region, locale);
   }
 
   if (result.state === 'not_found') {
