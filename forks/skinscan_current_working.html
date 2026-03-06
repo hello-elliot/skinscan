@@ -1805,7 +1805,13 @@ async function resolveProduct(query, options = {}) {
     return backend;
   }
   if (options.forSuggest) {
-    return { state: 'error', decisionReason: 'backend_unavailable', autoResolved: false, candidates: [] };
+    return {
+      state: 'candidate_list',
+      decisionReason: 'unknown_brand',
+      autoResolved: false,
+      normalizedQuery: normalizeQuery(query),
+      candidates: []
+    };
   }
   return resolveProductLocal(query, options);
 }

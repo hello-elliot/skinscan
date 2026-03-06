@@ -2604,7 +2604,7 @@ async function tryAdapter(name, fn, context) {
   if (remaining <= 120) return { ok: false, failureStage: 'source_timeout' };
 
   try {
-    const result = await fn(Math.min(SOURCE_TIMEOUT_MS, remaining));
+    const result = await fn(Math.min(INGREDIENT_SOURCE_TIMEOUT_MS, remaining));
     if (!result) {
       markAdapterFailure(name);
       return { ok: false, failureStage: 'no_ingredient_block_found' };
