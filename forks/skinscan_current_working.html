@@ -2009,25 +2009,14 @@ async function showProductNeedsIngredients(product, options = {}) {
       return;
     }
   }
-  // Simple direct fallback: query INCI by product name before giving up.
-  const inciQuery = [product?.brand, product?.name].filter(Boolean).join(' ').trim() || String(product?.name || '').trim();
-  if (inciQuery) {
-    const inci = await fetchInciIngredients(inciQuery, true);
-    if (inci?.ingredients) {
-      const enriched = {
-        ...product,
-        name: inci.productName || product.name,
-        brand: inci.brand || product.brand || '',
-        ingredientsText: inci.ingredients,
-        ingredientsStatus: 'available'
-      };
-      if (enriched.productId && enriched.ingredientsText) {
-        await persistResolvedIngredients(enriched, 'inci-direct');
-      }
-      trackEvent('analysis_autostart_after_enrichment', { productId: enriched.productId || '', name: enriched.name || product.name || '' });
-      await runAnalysis(enriched.name || product.name, enriched.brand || product.brand || '', enriched.ingredientsText, 'resolver', enriched.img || product.img || '', enriched.category || product.category || '');
-      return;
+  const direct = await resolveIngredientsDirectSources(product);
+  if (direct?.ingredientsText) {
+    if (direct.productId && direct.ingredientsText) {
+      await persistResolvedIngredients(direct, direct.source || 'direct-fallback');
     }
+    trackEvent('analysis_autostart_after_enrichment', { productId: direct.productId || '', name: direct.name || product.name || '' });
+    await runAnalysis(direct.name || product.name, direct.brand || product.brand || '', direct.ingredientsText, 'resolver', direct.img || product.img || '', direct.category || product.category || '');
+    return;
   }
   document.getElementById('loading').classList.remove('show');
   document.getElementById('results').innerHTML = `
@@ -2166,25 +2155,67 @@ async function pickProduct(i) {
     await runAnalysis(enriched.name || p.name, enriched.brand || p.brand || '', enriched.ingredientsText, 'resolver', enriched.img || p.img || '', enriched.category || p.category || '');
     return;
   }
-  const inciDirect = await fetchInciIngredients([p.brand, p.name].filter(Boolean).join(' ').trim() || p.name, true);
-  if (inciDirect?.ingredients) {
-    const directEnriched = {
-      ...p,
-      name: inciDirect.productName || p.name,
-      brand: inciDirect.brand || p.brand || '',
-      ingredientsText: inciDirect.ingredients,
-      ingredientsStatus: 'available'
-    };
-    if (directEnriched.productId && directEnriched.ingredientsText) {
-      await persistResolvedIngredients(directEnriched, 'inci-direct');
+  const direct = await resolveIngredientsDirectSources(p);
+  if (direct?.ingredientsText) {
+    if (direct.productId && direct.ingredientsText) {
+      await persistResolvedIngredients(direct, direct.source || 'direct-fallback');
     }
     sendSelectionFeedback(true, true);
-    trackEvent('product_confirmation_accepted', { name: directEnriched.name || p.name, source: 'inci_direct' });
-    await runAnalysis(directEnriched.name || p.name, directEnriched.brand || p.brand || '', directEnriched.ingredientsText, 'resolver', directEnriched.img || p.img || '', directEnriched.category || p.category || '');
+    trackEvent('product_confirmation_accepted', { name: direct.name || p.name, source: direct.source || 'direct_fallback' });
+    await runAnalysis(direct.name || p.name, direct.brand || p.brand || '', direct.ingredientsText, 'resolver', direct.img || p.img || '', direct.category || p.category || '');
     return;
   }
   sendSelectionFeedback(false, false);
   showProductNeedsIngredients(p);
+}
+
+async function resolveIngredientsDirectSources(product) {
+  const q = [product?.brand, product?.name].filter(Boolean).join(' ').trim() || String(product?.name || '').trim();
+  if (!q) return null;
+
+  const tasks = [
+    (async () => {
+      try {
+        const obf = await searchOBF(q);
+        const best = (obf || []).find(x => String(x.ingredientsText || '').trim().length > 20);
+        if (!best) return null;
+        return {
+          ...product,
+          name: best.name || product.name,
+          brand: best.brand || product.brand || '',
+          category: best.category || product.category || '',
+          img: best.img || product.img || '',
+          ingredientsText: best.ingredientsText,
+          ingredientsStatus: 'available',
+          source: 'obf-direct'
+        };
+      } catch (_) {
+        return null;
+      }
+    })(),
+    (async () => {
+      try {
+        const inci = await fetchInciIngredients(q, true);
+        if (!inci?.ingredients) return null;
+        return {
+          ...product,
+          name: inci.productName || product.name,
+          brand: inci.brand || product.brand || '',
+          ingredientsText: inci.ingredients,
+          ingredientsStatus: 'available',
+          source: 'inci-direct'
+        };
+      } catch (_) {
+        return null;
+      }
+    })()
+  ];
+
+  const settled = await Promise.allSettled(tasks);
+  for (const item of settled) {
+    if (item.status === 'fulfilled' && item.value?.ingredientsText) return item.value;
+  }
+  return null;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
