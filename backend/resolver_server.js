@@ -34,6 +34,7 @@ const ENRICH_PUBCHEM_SCRIPT_PATH = path.join(__dirname, 'enrich_pubchem.js');
 
 const SOURCE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SOURCE_TIMEOUT_MS = 3000;
+const INGREDIENT_SOURCE_TIMEOUT_MS = Number(process.env.INGREDIENT_SOURCE_TIMEOUT_MS || 5500);
 const SYNC_ENRICH_BUDGET_MS = 10000;
 const ASYNC_POLL_BUDGET_MS = 8000;
 const FAST_SEARCH_BUDGET_MS = Number(process.env.FAST_SEARCH_BUDGET_MS || 1500);
@@ -777,7 +778,7 @@ function ingredientTokens(text) {
 function scoreIngredientCandidate(text) {
   const tokens = ingredientTokens(text);
   if (!tokens.length) return { valid: false, confidence: 0, reason: 'no_ingredient_block_found' };
-  if (tokens.length < 10) return { valid: false, confidence: 0.2, reason: 'parser_rejected' };
+  if (tokens.length < 6) return { valid: false, confidence: 0.2, reason: 'parser_rejected' };
   const alphaLike = tokens.filter(t => /[a-z]/i.test(t)).length;
   const alphaRatio = alphaLike / tokens.length;
   if (alphaRatio < 0.8) return { valid: false, confidence: 0.25, reason: 'parser_rejected' };
@@ -1486,13 +1487,13 @@ function bestScoredProduct(products, query) {
   return scored[0]?.p || null;
 }
 
-async function fetchIngredientsFromOBF(query) {
+async function fetchIngredientsFromOBF(query, timeoutMs = INGREDIENT_SOURCE_TIMEOUT_MS) {
   const cacheKey = `obf:${normalizeText(query)}`;
   const cached = getSourceCache(cacheKey);
   if (cached) return cached;
 
   const url = `https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=10&fields=product_name,brands,ingredients_text,image_small_url,categories,url`;
-  const data = await fetchJsonWithTimeout(url, SOURCE_TIMEOUT_MS, { 'User-Agent': 'SkinScanResolver/1.0 (support@skinscan.local)' });
+  const data = await fetchJsonWithTimeout(url, timeoutMs, { 'User-Agent': 'SkinScanResolver/1.0 (support@skinscan.local)' });
   const best = bestScoredProduct(data.products || [], normalizeText(query));
   if (!best || !best.ingredients_text) return null;
 
@@ -2230,7 +2231,7 @@ async function discoverPdpUrls(query, product) {
 
   const inciCandidates = await fetchProductCandidatesFromIncidecoder(query).catch(() => []);
   inciCandidates
-    .filter(c => overlapScore(`${query} ${product.brand_canonical} ${product.name_canonical}`, `${c.brand_canonical} ${c.name_canonical}`) >= 0.62)
+    .filter(c => overlapScore(`${query} ${product.brand_canonical} ${product.name_canonical}`, `${c.brand_canonical} ${c.name_canonical}`) >= 0.5)
     .forEach(c => (c.source_urls || []).forEach(u => urls.add(u)));
 
   if (urls.size < 2) {
@@ -2242,7 +2243,7 @@ async function discoverPdpUrls(query, product) {
   return [...urls].filter(Boolean).slice(0, 10);
 }
 
-async function fetchIngredientsFromProfileUrls(productId, kind, explicitUrls = []) {
+async function fetchIngredientsFromProfileUrls(productId, kind, explicitUrls = [], timeoutMs = INGREDIENT_SOURCE_TIMEOUT_MS) {
   const profiles = loadSourceProfiles();
   const urls = [
     ...explicitUrls.filter(url => classifyUrlKind(url) === kind),
@@ -2256,7 +2257,7 @@ async function fetchIngredientsFromProfileUrls(productId, kind, explicitUrls = [
     const cached = getSourceCache(cacheKey);
     if (cached) return cached;
 
-    const text = await fetchTextWithTimeout(url, SOURCE_TIMEOUT_MS);
+    const text = await fetchTextWithTimeout(url, timeoutMs);
     const parsed = extractIngredientBlockFromHtml(text, url);
     if (!parsed) continue;
 
@@ -2276,9 +2277,20 @@ async function fetchIngredientsFromProfileUrls(productId, kind, explicitUrls = [
 }
 
 function parseAiResult(text) {
-  const ingredientsMatch = String(text || '').match(/INGREDIENTS:\s*([\s\S]+)/i);
-  if (!ingredientsMatch) return null;
-  const ingredientsText = normalizeIngredientText(ingredientsMatch[1].split('\n')[0]);
+  const raw = String(text || '');
+  const ingredientsMatch = raw.match(/INGREDIENTS:\s*([\s\S]+)/i);
+  let candidate = '';
+  if (ingredientsMatch && ingredientsMatch[1]) {
+    candidate = ingredientsMatch[1]
+      .replace(/\n\s*(PRODUCT|BRAND)\s*:[^\n]*/gi, ' ')
+      .replace(/\n+/g, ', ')
+      .trim();
+  } else {
+    const parsed = parseJsonObjectFromText(raw);
+    if (parsed && typeof parsed.ingredients === 'string') candidate = parsed.ingredients;
+  }
+  if (!candidate) return null;
+  const ingredientsText = normalizeIngredientText(candidate);
   const quality = scoreIngredientCandidate(ingredientsText);
   if (!quality.valid) return null;
   return { ingredientsText, confidence: quality.confidence };
@@ -2508,14 +2520,14 @@ function persistApprovedIngredientProposal(proposal, approvalState = 'approved_m
   writeIngredientProposals(proposals);
 }
 
-async function fetchIngredientsFromAIFallback(query) {
+async function fetchIngredientsFromAIFallback(query, timeoutMs = INGREDIENT_SOURCE_TIMEOUT_MS + 1200) {
   if (!AI_FALLBACK_ENABLED) return null;
   const cacheKey = `ai:${normalizeText(query)}`;
   const cached = getSourceCache(cacheKey);
   if (cached) return cached;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), SOURCE_TIMEOUT_MS + 1000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${AI_PROXY_URL.replace(/\/+$/, '')}/v1/messages`, {
       method: 'POST',
@@ -2531,7 +2543,20 @@ async function fetchIngredientsFromAIFallback(query) {
         tools: [{
           type: 'web_search_20250305',
           name: 'web_search',
-          allowed_domains: ['world.openbeautyfacts.org', 'sephora.com', 'ulta.com', 'esteelauder.com', 'dralthea.com', 'incidecoder.com']
+          allowed_domains: [
+            'world.openbeautyfacts.org',
+            'incidecoder.com',
+            'sephora.com',
+            'ulta.com',
+            'boots.com',
+            'douglas.com',
+            'lookfantastic.com',
+            'yesstyle.com',
+            'stylevana.com',
+            'sundayriley.com',
+            'esteelauder.com',
+            'dralthea.com'
+          ]
         }],
         messages: [{ role: 'user', content: `Find the full INCI ingredients for: ${query}. Prefer official brand pages, major retailers, structured databases. Reply exactly:\nPRODUCT: ...\nBRAND: ...\nINGREDIENTS: comma-separated list.` }]
       })
@@ -2618,11 +2643,11 @@ function buildAdapters(product, query, discoveredUrls = []) {
         };
       }
     },
-    { name: 'obf', exec: () => fetchIngredientsFromOBF(q) },
-    { name: 'incidecoder', exec: () => fetchIngredientsFromProfileUrls(product.product_id, 'brand', [...discoveredUrls, ...((product.source_urls || []).filter(u => String(u).includes('incidecoder.com')))]) },
-    { name: 'retailer', exec: () => fetchIngredientsFromProfileUrls(product.product_id, 'retailer', discoveredUrls) },
-    { name: 'brand', exec: () => fetchIngredientsFromProfileUrls(product.product_id, 'brand', discoveredUrls) },
-    { name: 'ai', exec: () => fetchIngredientsFromAIFallback(q) }
+    { name: 'obf', exec: (timeoutMs) => fetchIngredientsFromOBF(q, timeoutMs) },
+    { name: 'incidecoder', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'brand', [...discoveredUrls, ...((product.source_urls || []).filter(u => String(u).includes('incidecoder.com')))], timeoutMs) },
+    { name: 'retailer', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'retailer', discoveredUrls, timeoutMs) },
+    { name: 'brand', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'brand', discoveredUrls, timeoutMs) },
+    { name: 'ai', exec: (timeoutMs) => fetchIngredientsFromAIFallback(q, timeoutMs) }
   ];
 }
 
