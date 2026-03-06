@@ -1843,6 +1843,53 @@ async function fetchImmediateIngredientsByQuery(query, budgetMs = 4200) {
   return null;
 }
 
+function buildIngredientLookupQueries(product, query) {
+  const out = new Set();
+  const add = (v) => {
+    const s = String(v || '').replace(/\s+/g, ' ').trim();
+    if (s.length >= 4) out.add(s);
+  };
+  add(query);
+  add(product?.name_canonical);
+  add(`${product?.brand_canonical || ''} ${product?.name_canonical || ''}`);
+  add(`${product?.brand_canonical || ''} ${String(product?.name_canonical || '').replace(product?.brand_canonical || '', '').trim()}`);
+  add(String(product?.name_canonical || '').replace(/\b(cream|serum|essence|moisturizer|moisturiser|gel|lotion)\b/ig, ''));
+  return [...out];
+}
+
+async function fetchImmediateIngredientsForProduct(product, query, budgetMs = 5200) {
+  if (!product) return null;
+  const started = Date.now();
+  const left = () => Math.max(300, budgetMs - (Date.now() - started));
+
+  const sourceUrls = Array.isArray(product.source_urls) ? product.source_urls.filter(Boolean) : [];
+  if (sourceUrls.length) {
+    const incidecoderUrls = sourceUrls.filter(u => String(u).toLowerCase().includes('incidecoder.com'));
+    if (incidecoderUrls.length) {
+      const inciHit = await fetchIngredientsFromProfileUrls(product.product_id, 'brand', incidecoderUrls, Math.min(2600, left())).catch(() => null);
+      if (inciHit?.ingredientsText) return inciHit;
+    }
+    const retailerUrls = sourceUrls.filter(u => classifyUrlKind(u) === 'retailer');
+    if (retailerUrls.length) {
+      const rHit = await fetchIngredientsFromProfileUrls(product.product_id, 'retailer', retailerUrls, Math.min(2200, left())).catch(() => null);
+      if (rHit?.ingredientsText) return rHit;
+    }
+    const brandUrls = sourceUrls.filter(u => classifyUrlKind(u) === 'brand');
+    if (brandUrls.length) {
+      const bHit = await fetchIngredientsFromProfileUrls(product.product_id, 'brand', brandUrls, Math.min(2200, left())).catch(() => null);
+      if (bHit?.ingredientsText) return bHit;
+    }
+  }
+
+  const queries = buildIngredientLookupQueries(product, query);
+  for (const q of queries) {
+    const hit = await fetchImmediateIngredientsByQuery(q, Math.min(2200, left())).catch(() => null);
+    if (hit?.ingredientsText) return hit;
+    if (left() <= 350) break;
+  }
+  return null;
+}
+
 function extractJsonLdIngredients(text) {
   const scripts = [...String(text || '').matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
   for (const block of scripts) {
@@ -2835,6 +2882,20 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
       return;
     }
 
+    const immediate = await fetchImmediateIngredientsForProduct(product, query || `${product.brand_canonical} ${product.name_canonical}`, 5200).catch(() => null);
+    if (immediate?.ingredientsText && persistResolvedProductIngredients(productId, immediate)) {
+      withJobState(productId, { state: 'available', done: true, lastError: '' });
+      appendJobAdapterTrace(productId, { stage: 'adapter_success', adapter: 'direct_lookup', source: immediate.source || 'direct_lookup' });
+      pushMetric('ingredient_resolve_succeeded', {
+        productId,
+        source: immediate.source || 'direct_lookup',
+        duration_ms: Date.now() - startedAt,
+        mode: options.syncMode ? 'sync' : 'async',
+        matchTypeCount: { exact: 0, synonym: 0, family: 0, generic_extract: 0, unknown: 0 }
+      });
+      return;
+    }
+
     const context = { deadline: Date.now() + SYNC_ENRICH_BUDGET_MS };
     const discoveryQuery = query || `${product.brand_canonical} ${product.name_canonical}`.trim();
     const discoveryBudgetMs = Math.max(350, Math.min(1800, context.deadline - Date.now() - 3200));
@@ -3080,7 +3141,9 @@ async function handleResolveProducts(req, res) {
   }
 
   if (result.product?.productId && result.product.ingredientsStatus !== 'available') {
-    const direct = await fetchImmediateIngredientsByQuery(query, 4200).catch(() => null);
+    const index = readIndex();
+    const productForDirect = index.products.find(x => x.product_id === result.product.productId);
+    const direct = await fetchImmediateIngredientsForProduct(productForDirect, query, 5200).catch(() => null);
     if (direct?.ingredientsText) {
       const persisted = persistResolvedProductIngredients(result.product.productId, direct);
       if (persisted) {
@@ -3249,7 +3312,7 @@ async function handleEnrichIngredients(req, res) {
   }
 
   const immediateQuery = query || `${product.brand_canonical} ${product.name_canonical}`.trim();
-  const direct = await fetchImmediateIngredientsByQuery(immediateQuery, 4200).catch(() => null);
+  const direct = await fetchImmediateIngredientsForProduct(product, immediateQuery, 5200).catch(() => null);
   if (direct?.ingredientsText) {
     const persisted = persistResolvedProductIngredients(productId, direct);
     if (persisted) {
