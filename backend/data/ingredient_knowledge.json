@@ -111,6 +111,142 @@
       "al": 0,
       "safe": true,
       "func": "skin conditioning"
+    },
+    "CETEARYL OLIVATE": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier/emollient"
+    },
+    "SORBITAN OLIVATE": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "COPPER PALMITOYL HEPTAPEPTIDE-14": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "peptide"
+    },
+    "ACETYL GLUTAMINE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning"
+    },
+    "COCO-CAPRYLATE/CAPRATE": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient"
+    },
+    "LACTIC ACID/GLYCOLIC ACID COPOLYMER": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "AHA copolymer"
+    },
+    "HYDROXYETHYL ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "thickener"
+    },
+    "ISOMALT": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "humectant"
+    },
+    "PHYTOSTERYL OLEATE": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient"
+    },
+    "C12-16 ALCOHOLS": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "fatty alcohols/emollient"
+    },
+    "SODIUM ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "thickener"
+    },
+    "MALTODEXTRIN": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "binder/humectant"
+    },
+    "ROSMARINUS OFFICINALIS (ROSEMARY) WATER": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "botanical water"
+    },
+    "CITRIC ACID MONOHYDRATE": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "pH adjuster"
+    },
+    "CETEARETH-25": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "CAPROOYL PHYTOSPHINGOSINE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning/lipid"
+    },
+    "CAPROOYL SPHINGOSINE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning/lipid"
     }
   },
   "synonyms": {
@@ -118,7 +254,16 @@
     "YELLOW 5 (CI 19140)": "YELLOW 5",
     "CI 19140": "YELLOW 5",
     "TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
-    "MELALEUCA ALTERNIFOLIA LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER"
+    "MELALEUCA ALTERNIFOLIA LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
+    "COCO-CAPRYLATE/​CAPRATE": "COCO-CAPRYLATE/CAPRATE",
+    "COCO-CAPRYLATE / CAPRATE": "COCO-CAPRYLATE/CAPRATE",
+    "LACTIC ACID/​GLYCOLIC ACID COPOLYMER": "LACTIC ACID/GLYCOLIC ACID COPOLYMER",
+    "LACTIC ACID / GLYCOLIC ACID COPOLYMER": "LACTIC ACID/GLYCOLIC ACID COPOLYMER",
+    "HYDROXYETHYL ACRYLATE/​SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": "HYDROXYETHYL ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER",
+    "SODIUM ACRYLATE/​SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": "SODIUM ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER",
+    "LACTIC ACID/GYLCOLIC ACID COPOLYMER": "LACTIC ACID/GLYCOLIC ACID COPOLYMER",
+    "ROSMARINUS OFFICINALIS WATER": "ROSMARINUS OFFICINALIS (ROSEMARY) WATER",
+    "CAPROOYL PHYTOSPHINGOSINE": "CAPROOYL PHYTOSPHINGOSINE"
   },
   "family_rules": [
     {

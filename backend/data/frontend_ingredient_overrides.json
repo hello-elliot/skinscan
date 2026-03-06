@@ -23,19 +23,205 @@
       "al": 0,
       "safe": true,
       "func": "skin conditioning"
+    },
+    "CETEARYL OLIVATE": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier/emollient"
+    },
+    "SORBITAN OLIVATE": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "COPPER PALMITOYL HEPTAPEPTIDE-14": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "peptide"
+    },
+    "ACETYL GLUTAMINE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning"
+    },
+    "COCO-CAPRYLATE/CAPRATE": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient"
+    },
+    "LACTIC ACID/GLYCOLIC ACID COPOLYMER": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "AHA copolymer"
+    },
+    "HYDROXYETHYL ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "thickener"
+    },
+    "ISOMALT": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "humectant"
+    },
+    "PHYTOSTERYL OLEATE": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient"
+    },
+    "C12-16 ALCOHOLS": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "fatty alcohols/emollient"
+    },
+    "SODIUM ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "thickener"
+    },
+    "MALTODEXTRIN": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "binder/humectant"
+    },
+    "ROSMARINUS OFFICINALIS (ROSEMARY) WATER": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "botanical water"
+    },
+    "CITRIC ACID MONOHYDRATE": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "pH adjuster"
+    },
+    "CETEARETH-25": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "CAPROOYL PHYTOSPHINGOSINE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning/lipid"
+    },
+    "CAPROOYL SPHINGOSINE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning/lipid"
     }
   },
   "aliases": {
     "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
     "C12-20 ALKYL GLUCOSIDE": "C12-20 ALKYL GLUCOSIDE",
     "SODIUM DNA": "SODIUM DNA",
-    "TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER"
+    "TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
+    "CETEARYL OLIVATE": "CETEARYL OLIVATE",
+    "SORBITAN OLIVATE": "SORBITAN OLIVATE",
+    "COPPER PALMITOYL HEPTAPEPTIDE-14": "COPPER PALMITOYL HEPTAPEPTIDE-14",
+    "ACETYL GLUTAMINE": "ACETYL GLUTAMINE",
+    "COCO-CAPRYLATE/CAPRATE": "COCO-CAPRYLATE/CAPRATE",
+    "LACTIC ACID/GLYCOLIC ACID COPOLYMER": "LACTIC ACID/GLYCOLIC ACID COPOLYMER",
+    "HYDROXYETHYL ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": "HYDROXYETHYL ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER",
+    "ISOMALT": "ISOMALT",
+    "PHYTOSTERYL OLEATE": "PHYTOSTERYL OLEATE",
+    "C12-16 ALCOHOLS": "C12-16 ALCOHOLS",
+    "SODIUM ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": "SODIUM ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER",
+    "MALTODEXTRIN": "MALTODEXTRIN",
+    "ROSMARINUS OFFICINALIS (ROSEMARY) WATER": "ROSMARINUS OFFICINALIS (ROSEMARY) WATER",
+    "CITRIC ACID MONOHYDRATE": "CITRIC ACID MONOHYDRATE",
+    "CETEARETH-25": "CETEARETH-25",
+    "CAPROOYL PHYTOSPHINGOSINE": "CAPROOYL PHYTOSPHINGOSINE",
+    "CAPROOYL SPHINGOSINE": "CAPROOYL SPHINGOSINE",
+    "COCO-CAPRYLATE/​CAPRATE": "COCO-CAPRYLATE/CAPRATE",
+    "COCO-CAPRYLATE / CAPRATE": "COCO-CAPRYLATE/CAPRATE",
+    "LACTIC ACID/​GLYCOLIC ACID COPOLYMER": "LACTIC ACID/GLYCOLIC ACID COPOLYMER",
+    "LACTIC ACID / GLYCOLIC ACID COPOLYMER": "LACTIC ACID/GLYCOLIC ACID COPOLYMER",
+    "HYDROXYETHYL ACRYLATE/​SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": "HYDROXYETHYL ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER",
+    "SODIUM ACRYLATE/​SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": "SODIUM ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER",
+    "LACTIC ACID/GYLCOLIC ACID COPOLYMER": "LACTIC ACID/GLYCOLIC ACID COPOLYMER",
+    "ROSMARINUS OFFICINALIS WATER": "ROSMARINUS OFFICINALIS (ROSEMARY) WATER"
   },
   "synonyms": {
     "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
     "C12-20 ALKYL GLUCOSIDE": "C12-20 ALKYL GLUCOSIDE",
     "SODIUM DNA": "SODIUM DNA",
-    "TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER"
+    "TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
+    "CETEARYL OLIVATE": "CETEARYL OLIVATE",
+    "SORBITAN OLIVATE": "SORBITAN OLIVATE",
+    "COPPER PALMITOYL HEPTAPEPTIDE-14": "COPPER PALMITOYL HEPTAPEPTIDE-14",
+    "ACETYL GLUTAMINE": "ACETYL GLUTAMINE",
+    "COCO-CAPRYLATE/CAPRATE": "COCO-CAPRYLATE/CAPRATE",
+    "LACTIC ACID/GLYCOLIC ACID COPOLYMER": "LACTIC ACID/GLYCOLIC ACID COPOLYMER",
+    "HYDROXYETHYL ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": "HYDROXYETHYL ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER",
+    "ISOMALT": "ISOMALT",
+    "PHYTOSTERYL OLEATE": "PHYTOSTERYL OLEATE",
+    "C12-16 ALCOHOLS": "C12-16 ALCOHOLS",
+    "SODIUM ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": "SODIUM ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER",
+    "MALTODEXTRIN": "MALTODEXTRIN",
+    "ROSMARINUS OFFICINALIS (ROSEMARY) WATER": "ROSMARINUS OFFICINALIS (ROSEMARY) WATER",
+    "CITRIC ACID MONOHYDRATE": "CITRIC ACID MONOHYDRATE",
+    "CETEARETH-25": "CETEARETH-25",
+    "CAPROOYL PHYTOSPHINGOSINE": "CAPROOYL PHYTOSPHINGOSINE",
+    "CAPROOYL SPHINGOSINE": "CAPROOYL SPHINGOSINE",
+    "COCO-CAPRYLATE/​CAPRATE": "COCO-CAPRYLATE/CAPRATE",
+    "COCO-CAPRYLATE / CAPRATE": "COCO-CAPRYLATE/CAPRATE",
+    "LACTIC ACID/​GLYCOLIC ACID COPOLYMER": "LACTIC ACID/GLYCOLIC ACID COPOLYMER",
+    "LACTIC ACID / GLYCOLIC ACID COPOLYMER": "LACTIC ACID/GLYCOLIC ACID COPOLYMER",
+    "HYDROXYETHYL ACRYLATE/​SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": "HYDROXYETHYL ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER",
+    "SODIUM ACRYLATE/​SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER": "SODIUM ACRYLATE/SODIUM ACRYLOYLDIMETHYL TAURATE COPOLYMER",
+    "LACTIC ACID/GYLCOLIC ACID COPOLYMER": "LACTIC ACID/GLYCOLIC ACID COPOLYMER",
+    "ROSMARINUS OFFICINALIS WATER": "ROSMARINUS OFFICINALIS (ROSEMARY) WATER"
   },
   "familyRules": []
 }
