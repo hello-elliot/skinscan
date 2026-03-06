@@ -787,7 +787,7 @@ function ingredientTokens(text) {
 function scoreIngredientCandidate(text) {
   const tokens = ingredientTokens(text);
   if (!tokens.length) return { valid: false, confidence: 0, reason: 'no_ingredient_block_found' };
-  if (tokens.length < 6) return { valid: false, confidence: 0.2, reason: 'parser_rejected' };
+  if (tokens.length < 4) return { valid: false, confidence: 0.2, reason: 'parser_rejected' };
   const alphaLike = tokens.filter(t => /[a-z]/i.test(t)).length;
   const alphaRatio = alphaLike / tokens.length;
   if (alphaRatio < 0.8) return { valid: false, confidence: 0.25, reason: 'parser_rejected' };
@@ -3140,30 +3140,7 @@ async function handleResolveProducts(req, res) {
     });
   }
 
-  if (result.product?.productId && result.product.ingredientsStatus !== 'available') {
-    const index = readIndex();
-    const productForDirect = index.products.find(x => x.product_id === result.product.productId);
-    const direct = await fetchImmediateIngredientsForProduct(productForDirect, query, 5200).catch(() => null);
-    if (direct?.ingredientsText) {
-      const persisted = persistResolvedProductIngredients(result.product.productId, direct);
-      if (persisted) {
-        const refreshed = readIndex().products.find(x => x.product_id === result.product.productId);
-        if (refreshed) {
-          result.product.ingredientsStatus = refreshed.ingredients_status || 'available';
-          result.product.ingredientsText = refreshed.ingredients_text || '';
-          result.product.ingredientResolutionState = 'available';
-          result.product.ingredientFailureStage = '';
-        }
-        pushMetric('ingredient_direct_lookup_hit', {
-          productId: result.product.productId,
-          source: direct.source || 'direct_lookup'
-        });
-      }
-    }
-  }
-
   pushMetric('resolver_resolved', { query: result.normalized_query, state: result.state });
-  result = await enrichResolutionPayload(result, query, locale, region, { syncMode: true, forceRetry: false });
   pushMetric('search_confidence_assigned', {
     query: result.normalized_query,
     state: result.state,
@@ -3245,6 +3222,26 @@ function getIngredientStatus(productId) {
   };
 }
 
+function getRetrievalTrace(productId) {
+  const index = readIndex();
+  const product = index.products.find(x => x.product_id === productId);
+  if (!product) return { statusCode: 404, body: { error: 'missing_product' } };
+  const job = ingredientJobs.get(productId);
+  return {
+    statusCode: 200,
+    body: {
+      productId,
+      state: inferResolutionState(productId, product),
+      ingredientsStatus: product.ingredients_status || 'missing',
+      ingredientsSource: product.ingredients_source || '',
+      updatedAt: product.ingredients_last_verified_at || product.confidence_metadata?.updated_at || '',
+      failureStage: job?.lastError || '',
+      attemptCount: Number(job?.attemptCount || 0),
+      adapterTrace: Array.isArray(job?.adapterTrace) ? job.adapterTrace : []
+    }
+  };
+}
+
 async function handleIngredientsStatus(req, res, productId) {
   const payload = getIngredientStatus(productId);
   pushMetric('ingredient_status_polled', { productId, state: payload.body.state || 'missing' });
@@ -3312,7 +3309,7 @@ async function handleEnrichIngredients(req, res) {
   }
 
   const immediateQuery = query || `${product.brand_canonical} ${product.name_canonical}`.trim();
-  const direct = await fetchImmediateIngredientsForProduct(product, immediateQuery, 5200).catch(() => null);
+  const direct = await fetchImmediateIngredientsForProduct(product, immediateQuery, 3800).catch(() => null);
   if (direct?.ingredientsText) {
     const persisted = persistResolvedProductIngredients(productId, direct);
     if (persisted) {
@@ -3854,6 +3851,13 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    const traceMatch = url.pathname.match(/^\/resolver\/debug\/product\/([^/]+)\/retrieval-trace$/);
+    if (req.method === 'GET' && traceMatch) {
+      const payload = getRetrievalTrace(decodeURIComponent(traceMatch[1]));
+      sendJson(res, payload.statusCode, payload.body);
+      return;
+    }
+
     const ingestionStatusMatch = url.pathname.match(/^\/resolver\/ingestion-status\/([^/]+)$/);
     if (req.method === 'GET' && ingestionStatusMatch) {
       handleIngestionStatus(req, res, decodeURIComponent(ingestionStatusMatch[1]));
@@ -3903,7 +3907,8 @@ const server = http.createServer(async (req, res) => {
           '/resolver/unknown-ingredients/apply',
           '/resolver/ingredients/ingest-cosing',
           '/resolver/ingredients/enrich-pubchem',
-          '/resolver/ingredients/coverage-metrics'
+          '/resolver/ingredients/coverage-metrics',
+          '/resolver/debug/product/:productId/retrieval-trace'
         ]
       });
       return;

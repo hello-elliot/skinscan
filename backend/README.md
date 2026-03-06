@@ -123,9 +123,8 @@ Output:
 }
 ```
 
-When `ingredientsStatus` is missing, backend runs a hybrid enrichment:
-- synchronous attempt up to 10s
-- async continuation with status polling path
+`/resolver/products` is resolution-only and does not start ingredient enrichment.
+Ingredient retrieval starts after explicit product selection via `/resolver/enrich-ingredients`.
 
 ### `POST /resolver/enrich-ingredients`
 
@@ -160,6 +159,21 @@ Returns:
   "updatedAt": "2026-02-28T16:00:00.000Z",
   "failureStage": "",
   "attemptCount": 1
+}
+```
+
+### `GET /resolver/debug/product/:productId/retrieval-trace`
+
+Internal diagnostics endpoint for adapter-level ingredient retrieval trace:
+
+```json
+{
+  "productId": "sunday_riley_c_e_o_vitamin_c_rich_hydration_cream",
+  "state": "unavailable_retryable",
+  "ingredientsStatus": "missing",
+  "failureStage": "rate_limited",
+  "attemptCount": 2,
+  "adapterTrace": [{ "stage": "adapter_start", "adapter": "obf", "ts": "..." }]
 }
 ```
 

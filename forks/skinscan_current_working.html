@@ -296,6 +296,9 @@
     <button class="chip" data-type="dry">Dry</button>
     <button class="chip" data-type="normal" title="Checks EU allergens only — no pore-clogging or irritant analysis">Normal</button>
   </div>
+  <div style="margin:-16px 0 12px;display:flex;justify-content:flex-end">
+    <button type="button" onclick="clearSkinProfile()" style="border:0;background:transparent;color:rgba(26,20,16,0.56);font-size:11.5px;cursor:pointer;text-decoration:underline">Clear skin profile</button>
+  </div>
   <div id="skinHint" style="font-size:11px;color:rgba(196,98,45,0.65);margin:-4px 0 6px 2px;display:none">
     ↑ Select at least one skin type for a full analysis
   </div>
@@ -900,6 +903,14 @@ document.querySelectorAll('.chip').forEach(c => {
     scheduleAutoReanalysis();
   });
 });
+
+function clearSkinProfile() {
+  selectedTypes.clear();
+  document.querySelectorAll('.chip').forEach(chip => chip.classList.remove('active'));
+  try { localStorage.setItem('skinscan_skin_types', JSON.stringify([])); } catch (_) {}
+  trackEvent('skin_profile_changed', { selected: [], profileMode: 'none' });
+  scheduleAutoReanalysis();
+}
 
 // Unified source mode: internal resolver decides source order and fallback.
 function setSource() {}
@@ -1776,35 +1787,7 @@ async function resolveProduct(query, options = {}) {
     timeoutMs: options.forSuggest ? 1800 : 12000,
     abortController: options.abortController || null
   });
-  if (backend && backend.state && backend.state !== 'error') {
-    if (options.forSuggest) return backend;
-    const backendLowSignal = (
-      backend.state === 'not_found'
-      || (backend.state === 'candidate_list' && (
-        !Array.isArray(backend.candidates)
-        || backend.candidates.length === 0
-        || backend.decisionReason === 'unknown_brand'
-      ))
-    );
-    if (!backendLowSignal) return backend;
-
-    const local = await resolveProductLocal(query, options);
-    const localHasSignal = (
-      local.state === 'resolved_high'
-      || local.state === 'resolved_medium'
-      || (local.state === 'candidate_list' && Array.isArray(local.candidates) && local.candidates.length > 0)
-    );
-    if (localHasSignal) {
-      trackEvent('resolver_fallback_local_used', {
-        query,
-        backendState: backend.state,
-        backendDecisionReason: backend.decisionReason || '',
-        localState: local.state
-      });
-      return local;
-    }
-    return backend;
-  }
+  if (backend && backend.state && backend.state !== 'error') return backend;
   if (options.forSuggest) {
     return {
       state: 'candidate_list',
@@ -1814,7 +1797,13 @@ async function resolveProduct(query, options = {}) {
       candidates: []
     };
   }
-  return resolveProductLocal(query, options);
+  return {
+    state: 'error',
+    decisionReason: 'backend_unavailable',
+    autoResolved: false,
+    normalizedQuery: normalizeQuery(query),
+    candidates: []
+  };
 }
 
 async function triggerSuggest(query) {
@@ -1917,21 +1906,9 @@ async function sendCandidateSelectionFeedback(payload) {
 async function enrichCandidateIngredients(candidate) {
   const q = [candidate.brand, candidate.name].filter(Boolean).join(' ').trim() || candidate.name;
   if (!q) return candidate;
-  if (candidate.source === 'backend-index' && candidate.productId) {
+  if (candidate.productId) {
     const backendResolved = await tryBackendIngredientResolution(candidate, q);
     if (backendResolved?.ingredientsText) return backendResolved;
-  }
-  if (candidate.source === 'inci' && candidate.slug) {
-    const inci = await fetchInciIngredients(candidate.slug);
-    if (inci?.ingredients) {
-      return { ...candidate, name: inci.productName || candidate.name, brand: inci.brand || candidate.brand || '', ingredientsText: inci.ingredients, ingredientsStatus: 'available' };
-    }
-  }
-  const web = await googleIngredientsFallback(q);
-  if (web?.ingredients) {
-    const enriched = { ...candidate, name: web.productName || candidate.name, brand: web.brand || candidate.brand || '', ingredientsText: web.ingredients, ingredientsStatus: 'available' };
-    await persistResolvedIngredients(enriched, 'federated-web');
-    return enriched;
   }
   return candidate;
 }
@@ -1997,7 +1974,7 @@ async function tryBackendIngredientResolution(product, queryText = '', options =
       if (data?.ingredientResolutionState === 'available') return pollIngredientsStatus(product, 1200, 600);
     }
   } catch (_) {}
-  return pollIngredientsStatus(product, 8000, 1500);
+  return pollIngredientsStatus(product, 20000, 1500);
 }
 async function showProductNeedsIngredients(product, options = {}) {
   let resolved = null;
@@ -2008,15 +1985,6 @@ async function showProductNeedsIngredients(product, options = {}) {
       await runAnalysis(resolved.name || product.name, resolved.brand || product.brand || '', resolved.ingredientsText, 'resolver', resolved.img || product.img || '', resolved.category || product.category || '');
       return;
     }
-  }
-  const direct = await resolveIngredientsDirectSources(product);
-  if (direct?.ingredientsText) {
-    if (direct.productId && direct.ingredientsText) {
-      await persistResolvedIngredients(direct, direct.source || 'direct-fallback');
-    }
-    trackEvent('analysis_autostart_after_enrichment', { productId: direct.productId || '', name: direct.name || product.name || '' });
-    await runAnalysis(direct.name || product.name, direct.brand || product.brand || '', direct.ingredientsText, 'resolver', direct.img || product.img || '', direct.category || product.category || '');
-    return;
   }
   document.getElementById('loading').classList.remove('show');
   document.getElementById('results').innerHTML = `
@@ -2114,32 +2082,6 @@ async function pickProduct(i) {
   document.getElementById('results').classList.remove('show');
   document.getElementById('results').innerHTML = '';
 
-  // If INCI product has no ingredients yet, fetch them first then go straight to analysis
-  if (p.source === 'inci' && !p.ingredientsText && p.slug) {
-    setLoading('Fetching product details…', p.name);
-    const result = await fetchInciIngredients(p.slug);
-    if (result?.ingredients) {
-      selectedProduct.ingredientsText = result.ingredients;
-      selectedProduct.name = result.productName || p.name;
-      selectedProduct.brand = result.brand || p.brand;
-      selectedProduct.ingredientsStatus = 'available';
-      sendSelectionFeedback(true, true);
-      trackEvent('product_confirmation_accepted', { name: selectedProduct.name });
-      await runAnalysis(selectedProduct.name, selectedProduct.brand, selectedProduct.ingredientsText, 'resolver', selectedProduct.img || '', selectedProduct.category || '');
-    } else {
-      const enriched = await enrichCandidateIngredients(selectedProduct);
-      if (enriched?.ingredientsText) {
-        sendSelectionFeedback(true, true);
-        trackEvent('product_confirmation_accepted', { name: enriched.name || selectedProduct.name });
-        await runAnalysis(enriched.name || selectedProduct.name, enriched.brand || selectedProduct.brand || '', enriched.ingredientsText, 'resolver', enriched.img || selectedProduct.img || '');
-      } else {
-        sendSelectionFeedback(false, false);
-        showProductNeedsIngredients(selectedProduct);
-      }
-    }
-    return;
-  }
-
   if (p.ingredientsText) {
     sendSelectionFeedback(true, true);
     trackEvent('product_confirmation_accepted', { name: p.name });
@@ -2153,16 +2095,6 @@ async function pickProduct(i) {
     sendSelectionFeedback(true, true);
     trackEvent('product_confirmation_accepted', { name: enriched.name || p.name });
     await runAnalysis(enriched.name || p.name, enriched.brand || p.brand || '', enriched.ingredientsText, 'resolver', enriched.img || p.img || '', enriched.category || p.category || '');
-    return;
-  }
-  const direct = await resolveIngredientsDirectSources(p);
-  if (direct?.ingredientsText) {
-    if (direct.productId && direct.ingredientsText) {
-      await persistResolvedIngredients(direct, direct.source || 'direct-fallback');
-    }
-    sendSelectionFeedback(true, true);
-    trackEvent('product_confirmation_accepted', { name: direct.name || p.name, source: direct.source || 'direct_fallback' });
-    await runAnalysis(direct.name || p.name, direct.brand || p.brand || '', direct.ingredientsText, 'resolver', direct.img || p.img || '', direct.category || p.category || '');
     return;
   }
   sendSelectionFeedback(false, false);
