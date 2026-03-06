@@ -265,7 +265,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#F5F0E8">
   <!-- Apple touch icon generated inline -->
-  <link id="apple-touch-icon" rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjExNSIgZmlsbD0iI0Y1RjBFOCIvPjxwYXRoIGQ9Ik0zMTYgMTYwYzAtMzYtMjgtNjItNjgtNjItNDggMC03NiAyOC03NiA2NiAwIDM0IDIyIDU0IDYyIDY4bDI4IDEwYzM4IDE0IDYwIDM0IDYwIDcyIDAgNDYtMzQgNzgtODQgNzgtNTIgMC04Mi0zMC04Mi02OCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjQzQ2MjJEIiBzdHJva2Utd2lkdGg9IjQ2IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L3N2Zz4=">
+  <link id="apple-touch-icon" rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%23C4622D'/%3E%3Cstop offset='100%25' stop-color='%23D4834A'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='%23F5F0E8'/%3E%3Crect x='4' y='4' width='56' height='56' rx='12' fill='url(%23g)'/%3E%3Cpath d='M32 16c-7 9-12 13-12 21 0 7 5 12 12 12s12-5 12-12c0-8-5-12-12-21Z' fill='%23F5F0E8'/%3E%3Ccircle cx='37' cy='30' r='3' fill='%23E8C4A0'/%3E%3C/svg%3E">
   <!-- Manifest injected via JS so it works from any origin including file:// -->
   <script>
     (function(){
@@ -2237,7 +2237,7 @@ function claudeIngredientCheck(ingredients, skinTypes) {
     }
 
     // Acne-prone
-    if (skinTypes.includes('acne-prone') && (d.acne >= 3 || (d.acne === 2 && positionFrac <= 0.33))) {
+    if (skinTypes.includes('acne-prone') && d.acne >= 2) {
       const sev = d.acne >= 4 ? 'high' : d.acne === 3 ? 'mid' : 'low';
       acne.push({
         name: ing,
@@ -2325,44 +2325,27 @@ function claudeIngredientCheck(ingredients, skinTypes) {
   return result;  // synchronous — no await needed
 }
 
-// ── Chemist's note: pure narrative, runs after render ──
+// ── Chemist's note: deterministic local summary (no paid API calls) ──
 async function getChemistNote(productName, ingredients, verdict, skinTypes, aiFlags) {
-  const skinList = skinTypes.join(', ') || 'general skin';
-  // Pass the AI flags as context so the note doesn't repeat what the rows already say
-  const flagSummary = aiFlags
-    ? Object.entries(aiFlags)
-        .filter(([k]) => k !== 'notes')
-        .flatMap(([, arr]) => (arr || []).map(f => f.name))
-        .filter((v, i, a) => a.indexOf(v) === i)
-        .slice(0, 10)
-        .join(', ')
-    : '';
-  try {
-    const res = await fetch(apiUrl(), {
-      method: 'POST', headers: authHeaders(),
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6', max_tokens: 300,
-        messages: [{ role: 'user', content:
-          `You are a cosmetic chemist. Write a brief chemist's note for someone with ${skinList} skin.
+  const acneCount = (aiFlags?.acne || []).length;
+  const sensitiveCount = (aiFlags?.sensitive || []).length;
+  const dryCount = (aiFlags?.dry || []).length;
+  const allergenCount = (aiFlags?.allergens || []).length;
+  const totalSignals = acneCount + sensitiveCount + dryCount + allergenCount;
+  const skinLabel = skinTypes.length ? skinTypes.map(t => skinLabels[t] || t).join(', ') : 'general skin';
 
-Product: ${productName}
-Overall verdict: ${verdict} (${verdict === 'safe' ? 'low risk' : verdict === 'caution' ? 'moderate risk — some concerns' : 'high risk — notable concerns'})
-Flagged ingredients: ${flagSummary || 'none identified'}
-First 20 ingredients (by concentration): ${ingredients.slice(0,20).join(', ')}
-
-Rules:
-- Your note MUST be consistent with the verdict above — do not suggest the product is safer or riskier than stated
-- 2 sentences maximum
-- Focus on the single most useful action or watch-out for this specific skin type
-- Do not list the flagged ingredients again — the user already sees them
-- No marketing language, no general skincare advice
-- You may use **bold** for a single ingredient name or a short "Tip:" label`
-        }]
-      })
-    });
-    const data = await res.json();
-    return data.content?.[0]?.text || null;
-  } catch(e) { return null; }
+  if (verdict === 'safe') {
+    if (totalSignals === 0) return `For ${skinLabel}, this formula looks broadly compatible with low flagged risk from the mapped ingredients. Keep patch testing if your skin is highly reactive.`;
+    return `For ${skinLabel}, this formula is generally compatible, but review the flagged rows before daily use. Start with lower frequency and monitor for breakouts or irritation.`;
+  }
+  if (verdict === 'caution') {
+    const dominant = acneCount >= Math.max(sensitiveCount, dryCount, allergenCount) ? 'pore-clogging/heavy feel'
+      : sensitiveCount >= Math.max(acneCount, dryCount, allergenCount) ? 'irritation sensitivity'
+      : dryCount >= Math.max(acneCount, sensitiveCount, allergenCount) ? 'dryness risk'
+      : 'allergen sensitivity';
+    return `For ${skinLabel}, this sits in a mixed zone mainly due to ${dominant}. Use cautiously, and discontinue if you notice persistent congestion, redness, or stinging.`;
+  }
+  return `For ${skinLabel}, this formula shows multiple higher-risk signals for your selected profile. Prefer a lower-risk alternative and avoid introducing this as a daily product.`;
 }
 
 // ── isPastedIngredientList: distinguish pasted INCI list from a product name ──
@@ -2603,7 +2586,7 @@ function parseIngredients(text) {
 
   // Expand "A AND B" tokens into separate ingredients
   const expanded = [];
-  const junkPattern = /(read all the geeky details|learn more|click here|ingredients explained|what it does|how to use|here\s*>>?)/i;
+  const junkPattern = /(read all the geeky details|learn more|click here|ingredients explained|what it does|how to use|here\s*>>?|\[\s*more\s*\]|^\s*more\s*$)/i;
   for (const token of tokens) {
     if (!token || junkPattern.test(token)) continue;
     const andMatch = token.match(/^([A-Z][A-Z0-9\-\/\(\)\s]{2,}?)\s+AND\s+([A-Z][A-Z0-9\-\/\(\)\s]{2,})$/);
@@ -2734,11 +2717,13 @@ function acneSafetyScore(flagged) {
     // unless signal is high and likely present at meaningful concentration.
     if (a >= 5)      burden += 1.0 * positionWeight;
     else if (a === 4) burden += 0.7 * positionWeight;
-    else if (a === 3) burden += 0.35 * positionWeight;
-    else if (a === 2) burden += 0.15 * positionWeight;
+    else if (a === 3) burden += 0.4 * positionWeight;
+    else if (a === 2) burden += 0.25 * positionWeight;
     // acne=1: shown in list as informational, no burden (Fulton 1 = clinically negligible)
     // occlusive/wax acne=0: no burden, flagged via separate branch in claudeIngredientCheck
   }
+  // Multi-ingredient moderate burden should not remain "perfect".
+  if (flagged.length >= 4) burden += 0.2;
   if (burden < 0.3) return 5;
   if (burden < 0.8) return 4;
   if (burden < 1.5) return 3;
@@ -2769,7 +2754,7 @@ function buildCats(skinTypes, profileMode, aiFlags) {
     const f = get('acne');
     cats.push({ key:'acne', name:'Pore-clogging & heavy',
       desc: f.length === 0 ? 'No pore-clogging or occlusive ingredients found.' : null,
-      flagged: f, score: acneSafetyScore(f), weight: 0.95 });
+      flagged: f, score: acneSafetyScore(f), weight: 1.2 });
   } else if (normalOnly) {
     const f = get('normalAcne');
     cats.push({ key:'acne', name:'Balanced pore-clogging risk',
@@ -2963,7 +2948,7 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
       </div>`;
   }).join('');
 
-  // Unknown ingredients section — links to Google search for each
+  // Unknown ingredients section — plain list (no external links)
   const unknownHTML = unknown.length > 0 ? `
     <div class="cat-row" style="margin-top:6px">
       <div class="cat-top">
@@ -2972,11 +2957,8 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
       </div>
       <div style="font-size:11px;color:rgba(26,20,16,0.38);margin-bottom:4px;font-style:italic">A few ingredients need further mapping and may affect confidence.</div>
       <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">
-        ${unknown.map(u => {
-          const q = encodeURIComponent(u + ' cosmetic ingredient safety');
-          return `<a href="https://www.google.com/search?q=${q}" target="_blank" rel="noopener"
-            style="font-size:11px;padding:3px 8px;border-radius:20px;border:1px solid rgba(26,20,16,0.15);color:rgba(26,20,16,0.55);text-decoration:none;background:rgba(26,20,16,0.03)">${escHtml(u)}</a>`;
-        }).join('')}
+        ${unknown.map(u => `<span
+            style="font-size:11px;padding:3px 8px;border-radius:20px;border:1px solid rgba(26,20,16,0.15);color:rgba(26,20,16,0.55);background:rgba(26,20,16,0.03)">${escHtml(u)}</span>`).join('')}
       </div>
     </div>` : '';
 
@@ -3047,7 +3029,7 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
     </div>
     <div style="font-size:10.5px;color:rgba(26,20,16,0.25);line-height:1.6;margin-top:14px;text-align:center;padding:0 4px">
       2,200+ ingredient database (K/J/C-beauty expanded). Comedogenicity is treated as a low-certainty signal with concentration-aware weighting. EU allergens per Regulation 1223/2009.
-      Unknown ingredients shown above with search links. Not a substitute for dermatological advice.
+      Unknown ingredients are shown above for mapping review. Not a substitute for dermatological advice.
     </div>
   `;
   document.getElementById('results').classList.add('show');
