@@ -42,6 +42,7 @@ const CIRCUIT_OPEN_MS = 5 * 60 * 1000;
 const CIRCUIT_FAIL_THRESHOLD = 3;
 const AI_PROXY_URL = process.env.AI_PROXY_URL || 'https://skinscan-proxy.kelly-f.workers.dev';
 const AI_FALLBACK_ENABLED = String(process.env.AI_FALLBACK_ENABLED || 'true').toLowerCase() !== 'false';
+const SIMPLE_SOURCE_MODE = String(process.env.SIMPLE_SOURCE_MODE || 'true').toLowerCase() !== 'false';
 const AUTO_RESOLVE_ENABLED = String(process.env.AUTO_RESOLVE_ENABLED || 'true').toLowerCase() !== 'false';
 const STRICT_BRAND_GATE_ENABLED = String(process.env.STRICT_BRAND_GATE_ENABLED || 'true').toLowerCase() !== 'false';
 const INGESTION_POLL_INTERVAL_MS = Number(process.env.INGESTION_POLL_INTERVAL_MS || 30000);
@@ -1413,7 +1414,7 @@ async function fetchCandidatesFromConnectors(query) {
   out.push(...obf);
   const inci = await fetchProductCandidatesFromIncidecoder(query).catch(() => []);
   out.push(...inci);
-  if (out.length < 4) {
+  if (!SIMPLE_SOURCE_MODE && out.length < 4) {
     const ai = await fetchProductCandidatesFromAI(query).catch(() => []);
     out.push(...ai);
   }
@@ -1904,11 +1905,11 @@ async function fetchImmediateIngredientsByQuery(query, budgetMs = 4200) {
   const started = Date.now();
   const left = () => Math.max(250, budgetMs - (Date.now() - started));
 
-  const obf = await fetchIngredientsFromOBF(q, Math.min(2200, left())).catch(() => null);
-  if (obf?.ingredientsText) return obf;
-
   const inci = await fetchIngredientsFromIncidecoderSearch(q, Math.min(2800, left())).catch(() => null);
   if (inci?.ingredientsText) return inci;
+
+  const obf = await fetchIngredientsFromOBF(q, Math.min(2200, left())).catch(() => null);
+  if (obf?.ingredientsText) return obf;
 
   return null;
 }
@@ -2502,7 +2503,7 @@ async function discoverPdpUrls(query, product) {
     .filter(c => overlapScore(`${query} ${product.brand_canonical} ${product.name_canonical}`, `${c.brand_canonical} ${c.name_canonical}`) >= 0.5)
     .forEach(c => (c.source_urls || []).forEach(u => urls.add(u)));
 
-  if (urls.size < 2) {
+  if (!SIMPLE_SOURCE_MODE && urls.size < 2) {
     const aiCandidates = await fetchProductCandidatesFromAI(query).catch(() => []);
     aiCandidates
       .filter(c => overlapScore(`${query} ${product.brand_canonical} ${product.name_canonical}`, `${c.brand_canonical} ${c.name_canonical}`) >= 0.65)
@@ -2912,7 +2913,7 @@ async function tryAdapter(name, fn, context) {
 
 function buildAdapters(product, query, discoveredUrls = []) {
   const q = query || `${product.brand_canonical} ${product.name_canonical}`;
-  return [
+  const adapters = [
     {
       name: 'index-cache',
       exec: async () => {
@@ -2930,11 +2931,16 @@ function buildAdapters(product, query, discoveredUrls = []) {
     { name: 'incidecoder_url', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'brand', [...discoveredUrls, ...((product.source_urls || []).filter(u => String(u).includes('incidecoder.com')))], timeoutMs) },
     { name: 'incidecoder_slug', exec: (timeoutMs) => fetchIngredientsFromIncidecoderSlugGuesses(product, q, timeoutMs) },
     { name: 'incidecoder', exec: (timeoutMs) => fetchIngredientsFromIncidecoderSearch(q, timeoutMs) },
-    { name: 'obf', exec: (timeoutMs) => fetchIngredientsFromOBF(q, timeoutMs) },
-    { name: 'retailer', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'retailer', discoveredUrls, timeoutMs) },
-    { name: 'brand', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'brand', discoveredUrls, timeoutMs) },
-    { name: 'ai', exec: (timeoutMs) => fetchIngredientsFromAIFallback(q, timeoutMs) }
+    { name: 'obf', exec: (timeoutMs) => fetchIngredientsFromOBF(q, timeoutMs) }
   ];
+  if (!SIMPLE_SOURCE_MODE) {
+    adapters.push(
+      { name: 'retailer', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'retailer', discoveredUrls, timeoutMs) },
+      { name: 'brand', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'brand', discoveredUrls, timeoutMs) },
+      { name: 'ai', exec: (timeoutMs) => fetchIngredientsFromAIFallback(q, timeoutMs) }
+    );
+  }
+  return adapters;
 }
 
 async function runIngredientResolutionJob(productId, query, locale, region, options = {}) {

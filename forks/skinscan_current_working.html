@@ -2032,16 +2032,17 @@ function showSuggestions(products, options = {}) {
     shownCandidateProductIds: normalized.map(p => p.productId).filter(Boolean).slice(0, 10)
   };
   suggestionsEl.innerHTML = normalized.map((p, i) => {
-    const badgeText = confirmMode && i === 0 ? 'Confirm this product?' : (p.confidence || 'low').toUpperCase();
+    const confidenceLabel = (p.confidence === 'high')
+      ? 'Best match'
+      : (p.confidence === 'medium' ? 'Possible match' : 'Maybe match');
+    const badgeText = confirmMode && i === 0 ? 'Confirm this product?' : confidenceLabel;
     const badgeTone = confirmMode && i === 0 ? 'inci' : (p.confidence === 'high' ? 'obf' : 'inci');
-    const statusText = p.ingredientsStatus === 'available' ? 'Ready to analyze' : 'Tap to analyze (fetches ingredients)';
     return `
       <div class="sug-item" onclick="pickProduct(${i})">
         ${p.img ? `<img class="sug-thumb" src="${escHtml(p.img)}" alt="" onerror="this.style.display='none'">` : `<div class="sug-thumb-empty">◈</div>`}
         <div class="sug-info">
           <div class="sug-name">${escHtml([p.brand, p.name].filter(Boolean).join(' — ') || p.name || p.brand || 'Product')}</div>
           ${p.category ? `<div class="sug-brand">${escHtml(p.category)}</div>` : ''}
-          <div class="sug-brand">${escHtml(statusText)}</div>
         </div>
         <span class="sug-badge ${badgeTone}">${badgeText}</span>
       </div>`;
