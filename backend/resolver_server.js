@@ -3248,7 +3248,30 @@ async function handleEnrichIngredients(req, res) {
     return;
   }
 
-  const scheduled = await scheduleIngredientResolution(productId, query || `${product.brand_canonical} ${product.name_canonical}`, locale, region, {
+  const immediateQuery = query || `${product.brand_canonical} ${product.name_canonical}`.trim();
+  const direct = await fetchImmediateIngredientsByQuery(immediateQuery, 4200).catch(() => null);
+  if (direct?.ingredientsText) {
+    const persisted = persistResolvedProductIngredients(productId, direct);
+    if (persisted) {
+      withJobState(productId, { state: 'available', done: true, lastError: '' });
+      pushMetric('ingredient_direct_lookup_hit', {
+        productId,
+        source: direct.source || 'direct_lookup',
+        route: 'enrich_ingredients'
+      });
+      sendJson(res, 200, {
+        ok: true,
+        productId,
+        ingredientResolutionState: 'available',
+        ingredientJobId: productId,
+        ingredientFailureStage: '',
+        attemptCount: ingredientJobs.get(productId)?.attemptCount || 0
+      });
+      return;
+    }
+  }
+
+  const scheduled = await scheduleIngredientResolution(productId, immediateQuery, locale, region, {
     syncMode: false,
     forceRetry
   });
