@@ -41,7 +41,7 @@ const FAST_SEARCH_BUDGET_MS = Number(process.env.FAST_SEARCH_BUDGET_MS || 1500);
 const CIRCUIT_OPEN_MS = 5 * 60 * 1000;
 const CIRCUIT_FAIL_THRESHOLD = 3;
 const AI_PROXY_URL = process.env.AI_PROXY_URL || 'https://skinscan-proxy.kelly-f.workers.dev';
-const AI_FALLBACK_ENABLED = String(process.env.AI_FALLBACK_ENABLED || 'true').toLowerCase() !== 'false';
+const AI_FALLBACK_ENABLED = String(process.env.AI_FALLBACK_ENABLED || 'false').toLowerCase() !== 'false';
 const SIMPLE_SOURCE_MODE = String(process.env.SIMPLE_SOURCE_MODE || 'true').toLowerCase() !== 'false';
 const AUTO_RESOLVE_ENABLED = String(process.env.AUTO_RESOLVE_ENABLED || 'true').toLowerCase() !== 'false';
 const STRICT_BRAND_GATE_ENABLED = String(process.env.STRICT_BRAND_GATE_ENABLED || 'true').toLowerCase() !== 'false';
@@ -3051,8 +3051,9 @@ async function tryAdapter(name, fn, context) {
   }
 }
 
-function buildAdapters(product, query, discoveredUrls = []) {
+function buildAdapters(product, query, discoveredUrls = [], options = {}) {
   const q = query || `${product.brand_canonical} ${product.name_canonical}`;
+  const deterministicOnly = options.deterministicOnly !== false;
   const adapters = [
     {
       name: 'index-cache',
@@ -3076,9 +3077,11 @@ function buildAdapters(product, query, discoveredUrls = []) {
   if (!SIMPLE_SOURCE_MODE) {
     adapters.push(
       { name: 'retailer', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'retailer', discoveredUrls, timeoutMs) },
-      { name: 'brand', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'brand', discoveredUrls, timeoutMs) },
-      { name: 'ai', exec: (timeoutMs) => fetchIngredientsFromAIFallback(q, timeoutMs) }
+      { name: 'brand', exec: (timeoutMs) => fetchIngredientsFromProfileUrls(product.product_id, 'brand', discoveredUrls, timeoutMs) }
     );
+    if (!deterministicOnly && AI_FALLBACK_ENABLED) {
+      adapters.push({ name: 'ai', exec: (timeoutMs) => fetchIngredientsFromAIFallback(q, timeoutMs) });
+    }
   }
   return adapters;
 }
@@ -3098,7 +3101,12 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
       attempts: prevAttempts + 1,
       done: false,
       lastError: '',
-      adapterTrace: []
+      adapterTrace: [],
+      selectedSource: '',
+      ingredientsHash: '',
+      tokenCount: 0,
+      validationReason: '',
+      comparedSources: []
     });
     pushMetric('ingredient_resolve_started', { productId, query, mode: options.syncMode ? 'sync' : 'async' });
 
@@ -3117,7 +3125,17 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
 
     const immediate = await fetchImmediateIngredientsForProduct(product, query || `${product.brand_canonical} ${product.name_canonical}`, 5200).catch(() => null);
     if (immediate?.ingredientsText && persistResolvedProductIngredients(productId, immediate)) {
-      withJobState(productId, { state: 'available', done: true, lastError: '' });
+      const normalizedImmediate = normalizeIngredientText(immediate.ingredientsText || '');
+      withJobState(productId, {
+        state: 'available',
+        done: true,
+        lastError: '',
+        selectedSource: immediate.source || 'direct_lookup',
+        ingredientsHash: hashText(normalizedImmediate),
+        tokenCount: ingredientTokens(normalizedImmediate).length,
+        validationReason: '',
+        comparedSources: []
+      });
       appendJobAdapterTrace(productId, { stage: 'adapter_success', adapter: 'direct_lookup', source: immediate.source || 'direct_lookup' });
       pushMetric('ingredient_resolve_succeeded', {
         productId,
@@ -3143,7 +3161,7 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
       writeIndex(index);
       upsertCatalogProducts([product]);
     }
-    const adapters = buildAdapters(product, query, discoveredUrls);
+    const adapters = buildAdapters(product, query, discoveredUrls, { deterministicOnly: options.deterministicOnly !== false });
     let finalFailureStage = 'no_ingredient_block_found';
     const adapterCandidates = [];
 
@@ -3201,7 +3219,16 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
         if (resolved.matchType === 'unknown') upsertUnknownIngredient(token, 'resolver_enriched', productId);
       });
 
-      withJobState(productId, { state: 'available', done: true, lastError: '' });
+      withJobState(productId, {
+        state: 'available',
+        done: true,
+        lastError: '',
+        selectedSource: chosen.best.source || 'multi',
+        ingredientsHash: hashText(normalizedIngredients),
+        tokenCount: tokens.length,
+        validationReason: '',
+        comparedSources: chosen.debug || []
+      });
       appendJobAdapterTrace(productId, { stage: 'adapter_success', adapter: chosen.best.source || 'multi', source: chosen.best.source || 'multi' });
       appendJobAdapterTrace(productId, {
         stage: 'adapter_choice',
@@ -3222,7 +3249,12 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
     const nextState = (attempts >= 2 && !isRetryableIngredientFailure(finalFailureStage))
       ? 'unavailable_final'
       : 'unavailable_retryable';
-    withJobState(productId, { state: nextState, done: true, lastError: finalFailureStage });
+    withJobState(productId, {
+      state: nextState,
+      done: true,
+      lastError: finalFailureStage,
+      validationReason: finalFailureStage
+    });
     appendJobAdapterTrace(productId, { stage: 'final', failureStage: finalFailureStage, state: nextState });
 
     upsertMiss(query || `${product.brand_canonical} ${product.name_canonical}`, normalizeText(query || product.name_canonical || ''), finalFailureStage, {
@@ -3254,7 +3286,8 @@ async function scheduleIngredientResolution(productId, query, locale, region, op
 
   const jobPromise = runIngredientResolutionJob(productId, query, locale, region, {
     forceRetry: !!options.forceRetry,
-    syncMode: !!options.syncMode
+    syncMode: !!options.syncMode,
+    deterministicOnly: options.deterministicOnly !== false
   });
 
   if (options.syncMode) {
@@ -3269,7 +3302,12 @@ async function scheduleIngredientResolution(productId, query, locale, region, op
     state,
     jobId: productId,
     failureStage: job?.lastError || '',
-    attemptCount: job?.attemptCount || 0
+    attemptCount: job?.attemptCount || 0,
+    selectedSource: job?.selectedSource || refreshedProduct?.ingredients_source || '',
+    ingredientsHash: job?.ingredientsHash || refreshedProduct?.ingredients_version_hash || '',
+    tokenCount: Number(job?.tokenCount || ingredientTokens(refreshedProduct?.ingredients_text || '').length || 0),
+    validationReason: job?.validationReason || '',
+    comparedSources: Array.isArray(job?.comparedSources) ? job.comparedSources : []
   };
 }
 
@@ -3533,6 +3571,11 @@ function getIngredientStatus(productId) {
       ingredientsStatus: product.ingredients_status || 'missing',
       ingredientsText: product.ingredients_text || '',
       ingredientsSource: product.ingredients_source || '',
+      selectedSource: job?.selectedSource || product.ingredients_source || '',
+      ingredientsHash: job?.ingredientsHash || product.ingredients_version_hash || '',
+      tokenCount: Number(job?.tokenCount || ingredientTokens(product.ingredients_text || '').length || 0),
+      validationReason: job?.validationReason || '',
+      comparedSources: Array.isArray(job?.comparedSources) ? job.comparedSources : [],
       updatedAt: product.ingredients_last_verified_at || product.confidence_metadata?.updated_at || '',
       failureStage: job?.lastError || '',
       attemptCount: job?.attemptCount || 0,
@@ -3553,6 +3596,11 @@ function getRetrievalTrace(productId) {
       state: inferResolutionState(productId, product),
       ingredientsStatus: product.ingredients_status || 'missing',
       ingredientsSource: product.ingredients_source || '',
+      selectedSource: job?.selectedSource || product.ingredients_source || '',
+      ingredientsHash: job?.ingredientsHash || product.ingredients_version_hash || '',
+      tokenCount: Number(job?.tokenCount || ingredientTokens(product.ingredients_text || '').length || 0),
+      validationReason: job?.validationReason || '',
+      comparedSources: Array.isArray(job?.comparedSources) ? job.comparedSources : [],
       updatedAt: product.ingredients_last_verified_at || product.confidence_metadata?.updated_at || '',
       failureStage: job?.lastError || '',
       attemptCount: Number(job?.attemptCount || 0),
@@ -3576,6 +3624,8 @@ async function handleEnrichIngredients(req, res) {
   const locale = String(body.locale || '').trim();
   const region = String(body.region || '').trim();
   const forceRetry = !!body.forceRetry;
+  const mode = String(body.mode || 'deterministic').trim().toLowerCase();
+  const deterministicOnly = mode !== 'hybrid';
 
   if (!productId) {
     sendJson(res, 400, { error: 'productId_required' });
@@ -3609,7 +3659,16 @@ async function handleEnrichIngredients(req, res) {
       updated_at: nowIso()
     };
     writeIndex(index);
-    withJobState(productId, { state: 'available', done: true, lastError: '' });
+    withJobState(productId, {
+      state: 'available',
+      done: true,
+      lastError: '',
+      selectedSource: product.ingredients_source || ingredientsSource || 'manual',
+      ingredientsHash: product.ingredients_version_hash || hashText(normalizedIngredients),
+      tokenCount: ingredientTokens(normalizedIngredients).length,
+      validationReason: '',
+      comparedSources: []
+    });
     pushMetric('ingredient_resolve_succeeded', {
       productId,
       source: product.ingredients_source,
@@ -3622,7 +3681,12 @@ async function handleEnrichIngredients(req, res) {
       ingredientResolutionState: 'available',
       ingredientJobId: productId,
       ingredientFailureStage: '',
-      attemptCount: ingredientJobs.get(productId)?.attemptCount || 0
+      attemptCount: ingredientJobs.get(productId)?.attemptCount || 0,
+      selectedSource: product.ingredients_source || ingredientsSource || 'manual',
+      ingredientsHash: product.ingredients_version_hash || hashText(normalizedIngredients),
+      tokenCount: ingredientTokens(normalizedIngredients).length,
+      validationReason: '',
+      comparedSources: []
     });
     return;
   }
@@ -3632,7 +3696,17 @@ async function handleEnrichIngredients(req, res) {
   if (direct?.ingredientsText) {
     const persisted = persistResolvedProductIngredients(productId, direct);
     if (persisted) {
-      withJobState(productId, { state: 'available', done: true, lastError: '' });
+      const normalizedDirect = normalizeIngredientText(direct.ingredientsText || '');
+      withJobState(productId, {
+        state: 'available',
+        done: true,
+        lastError: '',
+        selectedSource: direct.source || 'direct_lookup',
+        ingredientsHash: hashText(normalizedDirect),
+        tokenCount: ingredientTokens(normalizedDirect).length,
+        validationReason: '',
+        comparedSources: []
+      });
       pushMetric('ingredient_direct_lookup_hit', {
         productId,
         source: direct.source || 'direct_lookup',
@@ -3644,7 +3718,12 @@ async function handleEnrichIngredients(req, res) {
         ingredientResolutionState: 'available',
         ingredientJobId: productId,
         ingredientFailureStage: '',
-        attemptCount: ingredientJobs.get(productId)?.attemptCount || 0
+        attemptCount: ingredientJobs.get(productId)?.attemptCount || 0,
+        selectedSource: direct.source || product.ingredients_source || 'direct_lookup',
+        ingredientsHash: hashText(normalizeIngredientText(direct.ingredientsText || '')),
+        tokenCount: ingredientTokens(direct.ingredientsText || '').length,
+        validationReason: '',
+        comparedSources: []
       });
       return;
     }
@@ -3652,7 +3731,8 @@ async function handleEnrichIngredients(req, res) {
 
   const scheduled = await scheduleIngredientResolution(productId, immediateQuery, locale, region, {
     syncMode: false,
-    forceRetry
+    forceRetry,
+    deterministicOnly
   });
 
   pushMetric('ingredients_enrich_requested', { productId, state: scheduled.state, forceRetry });
@@ -3662,8 +3742,193 @@ async function handleEnrichIngredients(req, res) {
     ingredientResolutionState: scheduled.state,
     ingredientJobId: scheduled.jobId,
     ingredientFailureStage: scheduled.failureStage,
-    attemptCount: scheduled.attemptCount
+    attemptCount: scheduled.attemptCount,
+    selectedSource: scheduled.selectedSource || '',
+    ingredientsHash: scheduled.ingredientsHash || '',
+    tokenCount: Number(scheduled.tokenCount || 0),
+    validationReason: scheduled.validationReason || '',
+    comparedSources: Array.isArray(scheduled.comparedSources) ? scheduled.comparedSources : []
   });
+}
+
+function bucketPositionWeight(index) {
+  if (index < 5) return 1.0;
+  if (index < 15) return 0.7;
+  return 0.4;
+}
+
+function toSeverity(value, highAt = 2) {
+  return value >= highAt ? 'high' : 'mid';
+}
+
+function genericSafetyFromFlags(flags = []) {
+  if (!flags.length) return 5;
+  const high = flags.filter(x => x.severity === 'high').length;
+  const mid = flags.length - high;
+  const burden = (high * 2.0) + (mid * 0.8);
+  if (burden < 0.5) return 5;
+  if (burden < 1.0) return 4;
+  if (burden < 2.0) return 3;
+  if (burden < 3.0) return 2;
+  return 1;
+}
+
+function acneSafetyFromFlags(flags = [], acneProne = false) {
+  if (!flags.length) return 5;
+  let burden = 0;
+  let moderateOrHigher = 0;
+  flags.forEach(f => {
+    const a = Number(f.acneVal || 0);
+    const posWeight = Number(f.positionWeight || 0.4);
+    if (a >= 5) burden += (acneProne ? 1.3 : 1.0) * posWeight;
+    else if (a === 4) burden += (acneProne ? 1.0 : 0.7) * posWeight;
+    else if (a === 3) burden += (acneProne ? 0.65 : 0.4) * posWeight;
+    else if (a === 2) burden += (acneProne ? 0.4 : 0.25) * posWeight;
+    if (a >= 2) moderateOrHigher += 1;
+  });
+  let score = 1;
+  if (burden < 0.3) score = 5;
+  else if (burden < 0.8) score = 4;
+  else if (burden < 1.5) score = 3;
+  else if (burden < 2.2) score = 2;
+  if (moderateOrHigher >= 1) score = Math.min(score, 4);
+  if (acneProne && moderateOrHigher >= 3) score = Math.min(score, 3);
+  return score;
+}
+
+function confidenceFromCoverage(total, unknown) {
+  if (!total) return { label: 'high', pct: 1, cap: null };
+  const pct = (total - unknown) / total;
+  if (pct >= 0.9) return { label: 'high', pct, cap: null };
+  if (pct >= 0.75) return { label: 'medium', pct, cap: 4.5 };
+  if (pct >= 0.6) return { label: 'medium', pct, cap: 3.5 };
+  return { label: 'low', pct, cap: 2.5 };
+}
+
+function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
+  const normalizedIngredients = normalizeIngredientText(ingredientsText || '');
+  const tokens = ingredientTokens(normalizedIngredients);
+  const profile = {
+    primary: ['normal', 'dry', 'oily', 'combination'].includes(String(profileInput.primary || '').toLowerCase())
+      ? String(profileInput.primary).toLowerCase()
+      : 'normal',
+    conditions: Array.isArray(profileInput.conditions)
+      ? [...new Set(profileInput.conditions.map(x => String(x || '').toLowerCase()).filter(Boolean))]
+      : []
+  };
+  const isAcneProne = profile.conditions.includes('acne-prone');
+  const isSensitive = profile.conditions.includes('sensitive') || profile.conditions.includes('reactive') || profile.conditions.includes('fragrance-allergy');
+
+  const knowledge = readIngredientKnowledge();
+  const canonicalIndex = readCanonicalIngredientIndex();
+  const canonicalLookup = buildCanonicalSynonymLookup(canonicalIndex);
+  const matchTypeCount = { exact: 0, synonym: 0, family: 0, generic_extract: 0, unknown: 0 };
+  const flagged = { acne: [], sensitive: [], dry: [], allergen: [] };
+  const unknown = [];
+
+  tokens.forEach((token, idx) => {
+    const resolved = resolveIngredientKnowledge(token, knowledge, canonicalLookup);
+    if (matchTypeCount[resolved.matchType] !== undefined) matchTypeCount[resolved.matchType] += 1;
+    const entry = resolved.canonicalId ? knowledge.canonical[resolved.canonicalId] : null;
+    if (!entry) {
+      unknown.push(token);
+      return;
+    }
+    const positionWeight = bucketPositionWeight(idx);
+    const acne = Number(entry.acne || 0);
+    const irr = Number(entry.irr || 0);
+    const dry = Number(entry.dry || 0);
+    const al = Number(entry.al || 0);
+
+    if (acne >= 2) {
+      flagged.acne.push({
+        name: token,
+        severity: toSeverity(acne, 4),
+        acneVal: acne,
+        positionWeight,
+        reason: acne >= 4 ? 'higher comedogenic signal' : 'moderate comedogenic signal'
+      });
+    }
+    if (irr >= 1) {
+      flagged.sensitive.push({
+        name: token,
+        severity: toSeverity(irr, 2),
+        reason: irr >= 2 ? 'known irritant/sensitiser' : 'mild irritant potential'
+      });
+    }
+    if (dry >= 1) {
+      flagged.dry.push({
+        name: token,
+        severity: toSeverity(dry, 2),
+        reason: dry >= 2 ? 'drying/stripping potential' : 'mild drying potential'
+      });
+    }
+    if (al >= 1) {
+      flagged.allergen.push({
+        name: token,
+        severity: 'high',
+        reason: 'EU fragrance allergen'
+      });
+    }
+  });
+
+  const acneScore = acneSafetyFromFlags(flagged.acne, isAcneProne);
+  const sensitiveScore = genericSafetyFromFlags(flagged.sensitive);
+  const dryScore = genericSafetyFromFlags(flagged.dry);
+  const allergenScore = genericSafetyFromFlags(flagged.allergen);
+  const includeAllergenInOverall = isSensitive;
+
+  const categories = [];
+  if (isAcneProne || profile.primary === 'oily' || profile.primary === 'combination' || profile.primary === 'normal') {
+    categories.push({ key: 'acne', score: acneScore, weight: isAcneProne ? 1.45 : 0.9, flagged: flagged.acne });
+  }
+  if (isSensitive || profile.primary === 'normal') {
+    categories.push({ key: 'reactive', score: sensitiveScore, weight: isSensitive ? 1.4 : 0.8, flagged: flagged.sensitive });
+  }
+  if (profile.primary === 'dry' || profile.primary === 'normal') {
+    categories.push({ key: 'dry', score: dryScore, weight: profile.primary === 'dry' ? 1.2 : 0.8, flagged: flagged.dry });
+  }
+  categories.push({
+    key: 'allergen',
+    score: allergenScore,
+    weight: includeAllergenInOverall ? 1.0 : 0,
+    flagged: flagged.allergen,
+    informationalOnly: !includeAllergenInOverall
+  });
+
+  const totalWeight = categories.reduce((sum, c) => sum + c.weight, 0) || 1;
+  let overall = categories.reduce((sum, c) => sum + (c.score * c.weight), 0) / totalWeight;
+  const conf = confidenceFromCoverage(tokens.length, unknown.length);
+  if (conf.cap !== null) overall = Math.min(overall, Math.max(conf.cap, overall - 1.0));
+  if (isAcneProne && flagged.acne.length > 0 && overall >= 5) overall = 4.9;
+  if (isAcneProne && unknown.length > 0) overall = Math.max(1, overall - Math.min(0.2, unknown.length * 0.05));
+  overall = Number(overall.toFixed(1));
+
+  return {
+    profile,
+    ingredientsTextNormalized: normalizedIngredients,
+    ingredientsHash: hashText(normalizedIngredients),
+    ingredientsCount: tokens.length,
+    unknownCount: unknown.length,
+    unknownIngredients: unknown,
+    confidence: { label: conf.label, pct: Number(conf.pct.toFixed(3)) },
+    matchTypeCount,
+    categories,
+    overall,
+    verdict: overall >= 4 ? 'safe' : overall >= 3 ? 'caution' : 'avoid'
+  };
+}
+
+async function handleAnalyzeIngredients(req, res) {
+  const body = await readBody(req);
+  const ingredientsText = String(body.ingredientsText || '').trim();
+  const profile = body.profile && typeof body.profile === 'object' ? body.profile : {};
+  if (!ingredientsText) {
+    sendJson(res, 400, { error: 'ingredientsText_required' });
+    return;
+  }
+  const result = analyzeIngredientsForProfile(ingredientsText, profile);
+  sendJson(res, 200, { ok: true, ...result });
 }
 
 async function handleCandidateSelectionFeedback(req, res) {
@@ -4129,6 +4394,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && url.pathname === '/resolver/analyze-ingredients') {
+      await handleAnalyzeIngredients(req, res);
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/resolver/ai-proxy/v1/messages') {
       await handleAiProxyMessages(req, res);
       return;
@@ -4226,6 +4496,7 @@ const server = http.createServer(async (req, res) => {
           '/healthz',
           '/resolver/products',
           '/resolver/products/fast',
+          '/resolver/analyze-ingredients',
           '/resolver/coverage-metrics',
           '/resolver/smoke-check',
           '/resolver/ai-proxy',

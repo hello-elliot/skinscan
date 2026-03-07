@@ -931,10 +931,9 @@ function dbLookup(name) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const RESOLVER_API_URL = window.__SKINSCAN_RESOLVER_API_URL || 'https://skinscan-3bgp.onrender.com';
 const PROXY_URL = window.__SKINSCAN_PROXY_URL || (String(RESOLVER_API_URL).replace(/\/+$/, '') + '/resolver/ai-proxy');
-const RESOLVER_API_FALLBACKS = [
-  'https://skinscan-3bgp.onrender.com',
-  'https://skinscan-1.onrender.com'
-];
+const RESOLVER_API_FALLBACKS = Array.isArray(window.__SKINSCAN_RESOLVER_API_FALLBACKS)
+  ? window.__SKINSCAN_RESOLVER_API_FALLBACKS
+  : [];
 
 // All Anthropic API calls go through the proxy — no key in the client
 function apiUrl()     { return PROXY_URL + '/v1/messages'; }
@@ -1073,9 +1072,6 @@ function applySkinChipUI() {
 }
 function setPrimarySkinType(nextPrimary) {
   skinProfile.primary = PRIMARY_SKIN_TYPES.has(nextPrimary) ? nextPrimary : 'normal';
-  if (skinProfile.primary === 'normal' && skinProfile.conditions.length) {
-    skinProfile.conditions = [];
-  }
 }
 function toggleConditionSkinType(condition) {
   if (!CONDITION_SKIN_TYPES.has(condition)) return;
@@ -1083,8 +1079,6 @@ function toggleConditionSkinType(condition) {
   if (has) {
     skinProfile.conditions = skinProfile.conditions.filter(c => c !== condition);
   } else {
-    // "Normal" cannot coexist with condition flags.
-    if (skinProfile.primary === 'normal') skinProfile.primary = 'combination';
     skinProfile.conditions = [...new Set([...skinProfile.conditions, condition])];
   }
 }
@@ -1716,188 +1710,8 @@ async function submitAddProduct() {
     updateAddProductUi('add_failed', { text: 'Could not submit right now. Try again in a moment.' });
   }
 }
-async function searchOBF(query) {
-  const url = `https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=8&fields=product_name,brands,ingredients_text,image_small_url,categories`;
-  const res = await fetch(url, { headers: { 'User-Agent': 'SkinScan/1.0 (skinscan@example.com)' } });
-  if (!res.ok) throw new Error('obf_search_failed');
-  const data = await res.json();
-  return (data.products || [])
-    .filter(p => p.product_name)
-    .map(p => ({
-      name: p.product_name,
-      brand: p.brands || '',
-      ingredientsText: p.ingredients_text || '',
-      ingredientsStatus: p.ingredients_text?.length > 20 ? 'available' : 'missing',
-      img: p.image_small_url || '',
-      category: (p.categories || '').split(',')[0]?.trim() || '',
-      source: 'obf'
-    }));
-}
-// ── Popular product slug cache — instant, zero API calls ──
-const SLUG_CACHE = {
-  'drunk elephant peptide cream':    'drunk-elephant-protini-tm-polypeptide-cream',
-  'drunk elephant protini':          'drunk-elephant-protini-tm-polypeptide-cream',
-  'protini polypeptide':             'drunk-elephant-protini-tm-polypeptide-cream',
-  'drunk elephant lala':             'drunk-elephant-lala-retro-whipped-cream',
-  'drunk elephant retinol':          'drunk-elephant-a-passioni-retinol-cream',
-  'drunk elephant vitamin c':        'drunk-elephant-c-firma-fresh-day-serum',
-  'cerave moisturizing cream':       'cerave-moisturizing-cream',
-  'cerave hydrating cleanser':       'cerave-hydrating-facial-cleanser',
-  'cerave facial moisturizing':      'cerave-facial-moisturizing-lotion-am',
-  'la roche posay toleriane':        'la-roche-posay-toleriane-double-repair-face-moisturizer',
-  'la roche posay cicaplast':        'la-roche-posay-cicaplast-baume-b5',
-  'la roche posay effaclar':         'la-roche-posay-effaclar-duo',
-  'the ordinary niacinamide':        'the-ordinary-niacinamide-10-zinc-1',
-  'the ordinary hyaluronic acid':    'the-ordinary-hyaluronic-acid-2-b5',
-  'the ordinary retinol':            'the-ordinary-retinol-0-2-in-squalane',
-  'neutrogena hydro boost':          'neutrogena-hydro-boost-water-gel',
-  'paula choice bha':                'paula-s-choice-skin-perfecting-2-bha-liquid-exfoliant',
-  'paula choice aha':                'paula-s-choice-skin-perfecting-8-aha-gel',
-  'tatcha water cream':              'tatcha-the-water-cream',
-  'tatcha dewy skin':                'tatcha-the-dewy-skin-cream',
-  'glow recipe watermelon':          'glow-recipe-watermelon-glow-sleeping-mask',
-  'glossier moisturizer':            'glossier-priming-moisturizer',
-  'sunday riley good genes':         'sunday-riley-good-genes-all-in-one-lactic-acid-treatment',
-  'skinceuticals ce ferulic':        'skinceuticals-c-e-ferulic',
-  'clinique dramatically different': 'clinique-dramatically-different-moisturizing-lotion',
-};
-function getCachedSlug(q) {
-  q = q.toLowerCase();
-  for (const [key, slug] of Object.entries(SLUG_CACHE)) {
-    if (q.includes(key)) return slug;
-  }
-  return null;
-}
-
-// ── searchINCIBySnippet ──
-// Does ONE web_search call with tool_choice:any so it reliably fires.
-// Reads the raw search result content blocks (tool_result) — which contain
-// full ingredient lists in their snippets — instead of asking Claude to
-// generate formatted output. Much more reliable.
-async function searchINCIBySnippet(query) {
-  const cached = cacheGet('inci', query);
-  if (cached) return cached;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
-  try {
-    const res = await fetch(apiUrl(), {
-      method: 'POST', headers: authHeaders(), signal: controller.signal,
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6', max_tokens: 2000,
-        tools: [{ type: 'web_search_20250305', name: 'web_search', allowed_domains: ['incidecoder.com'] }],
-        messages: [{ role: 'user', content:
-          'Find "' + query.replace(/"/g, '') + '" on incidecoder.com and return its full ingredient list.' +
-          '\nRespond with exactly:\nPRODUCT: <full name>\nBRAND: <brand>\nINGREDIENTS: <comma-separated INCI list>'
-        }],
-      }),
-    });
-    clearTimeout(timer);
-    const data = await res.json();
-    if (data.error) { console.error('[inci] error:', data.error); return null; }
-    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
-    console.log('[inci] response:', text.slice(0, 200));
-    return parseSearchResult(text, query);
-  } catch(e) {
-    clearTimeout(timer);
-    console.error('[inci] exception:', e.message);
-    return null;
-  }
-}
-
-function parseSearchResult(text, fallbackQuery) {
-  const productMatch     = text.match(/PRODUCT:\s*(.+)/i);
-  const brandMatch       = text.match(/BRAND:\s*(.+)/i);
-  const ingredientsMatch = text.match(/INGREDIENTS:\s*([\s\S]+)/i);
-  let ingredients = ingredientsMatch ? ingredientsMatch[1].trim().split('\n')[0] : '';
-  if (!ingredients || ingredients.length < 20) {
-    // Fallback parse for prose snippets containing ingredient blocks.
-    const loose = text.match(/ingredients?\s*[:\-]?\s*([A-Za-z0-9\-\(\)\/,\.\s]{80,2500})/i);
-    if (loose && loose[1]) ingredients = loose[1].trim().split('\n')[0];
-  }
-  if (!ingredients || ingredients.length < 20) return null;
-  const result = {
-    productName: productMatch ? productMatch[1].trim() : fallbackQuery,
-    brand:       brandMatch   ? brandMatch[1].trim()   : '',
-    ingredients,
-  };
-  cacheSet('inci', fallbackQuery, result);
-  return result;
-}
-
-// ── searchINCI: for the dropdown suggestions ──
-async function searchINCI(query) {
-  const cachedSlug = getCachedSlug(query);
-  if (cachedSlug) {
-    const name = cachedSlug.split('-').map(w => w.charAt(0).toUpperCase()+w.slice(1)).join(' ').replace(/\bTm\b/, '™');
-    return [{ name, brand:'', ingredientsText:'', ingredientsStatus: 'missing', img:'', category:'', source:'inci', slug: cachedSlug }];
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20000);
-  try {
-    const res = await fetch(apiUrl(), {
-      method: 'POST', headers: authHeaders(), signal: controller.signal,
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6', max_tokens: 600,
-        tools: [{ type: 'web_search_20250305', name: 'web_search', allowed_domains: ['incidecoder.com'] }],
-        messages: [{ role: 'user', content:
-          'Search incidecoder.com for: ' + query.replace(/"/g,'') +
-          '\nReturn up to 4 matching products as a raw JSON array only:\n[{"name":"...","brand":"...","slug":"url-slug"}]\nReturn [] if none.'
-        }],
-      }),
-    });
-    clearTimeout(timer);
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error('inci_search_failed');
-    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
-    return parseSlugList(text);
-  } catch(e) { clearTimeout(timer); throw e; }
-}
-
-function parseSlugList(text) {
-  const clean = text.replace(/```json|```/gi, '').trim();
-  const match = clean.match(/\[[\s\S]*\]/);
-  if (!match) return [];
-  try {
-    return JSON.parse(match[0])
-      .filter(p => p.slug)
-      .map(p => ({ name: p.name||p.slug, brand: p.brand||'', ingredientsText:'', ingredientsStatus: 'missing', img:'', category:'', source:'inci', slug: p.slug }));
-  } catch(e) { return []; }
-}
-
-// ── fetchInciIngredients ──
-// For a known slug: one search call, read ingredients from snippet.
-// For an unknown query (isQuery=true): same but also resolves the product.
-async function fetchInciIngredients(slugOrQuery, isQuery = false) {
-  // Cache shortcut
-  if (isQuery) {
-    const cachedSlug = getCachedSlug(slugOrQuery);
-    if (cachedSlug) return fetchInciIngredients(cachedSlug, false);
-  }
-
-  const searchQuery = isQuery
-    ? 'site:incidecoder.com/products ' + slugOrQuery
-    : 'site:incidecoder.com/products/' + slugOrQuery;
-
-  return searchINCIBySnippet(isQuery ? slugOrQuery : slugOrQuery.replace(/-/g, ' '));
-}
-
-const FUZZY_QUERY_MAP = {
-  'esta louder': 'estee lauder',
-  'estee louder': 'estee lauder',
-  'laroche posay': 'la roche posay',
-  'loroche posay': 'la roche posay',
-};
-
 function normalizeQuery(q) {
   return (q || '').toLowerCase().replace(/[^\w\s-]/g, ' ').replace(/\s+/g, ' ').trim();
-}
-function applyFuzzyCorrection(normalizedQuery) {
-  let corrected = normalizedQuery;
-  Object.entries(FUZZY_QUERY_MAP).forEach(([wrong, right]) => {
-    if (corrected.includes(wrong)) corrected = corrected.replace(wrong, right);
-  });
-  return corrected;
 }
 function wordOverlapScore(query, text) {
   const qWords = query.split(/\s+/).filter(Boolean);
@@ -1905,121 +1719,6 @@ function wordOverlapScore(query, text) {
   const target = (text || '').toLowerCase();
   const hits = qWords.filter(w => target.includes(w)).length;
   return hits / qWords.length;
-}
-function computeCandidateScore(candidate, normalizedQuery, usedFuzzy) {
-  const nameScore = wordOverlapScore(normalizedQuery, candidate.name || '');
-  const brandScore = wordOverlapScore(normalizedQuery, candidate.brand || '');
-  const ingredientBoost = candidate.ingredientsStatus === 'available' ? 0.08 : 0;
-  const imageBoost = candidate.img ? 0.05 : 0;
-  const exactBoost = (candidate.name || '').toLowerCase() === normalizedQuery ? 0.2 : 0;
-  const fuzzyPenalty = usedFuzzy ? -0.08 : 0;
-  const confidenceScore = Math.max(0, Math.min(1, (nameScore * 0.72) + (brandScore * 0.2) + ingredientBoost + imageBoost + exactBoost + fuzzyPenalty));
-  return {
-    confidenceScore,
-    nameSimilarity: Number(nameScore.toFixed(3)),
-    brandSimilarity: Number(brandScore.toFixed(3))
-  };
-}
-function rankCandidates(candidates, normalizedQuery, usedFuzzy) {
-  return [...candidates]
-    .map(c => ({ ...c, ...computeCandidateScore(c, normalizedQuery, usedFuzzy), brandMatched: null }))
-    .sort((a, b) => b.confidenceScore - a.confidenceScore);
-}
-function classifyResolution(ranked) {
-  if (!ranked.length) return { state: 'not_found', decisionReason: 'ambiguous', autoResolved: false };
-  const top = ranked[0];
-  const second = ranked[1];
-  const gap = second ? (top.confidenceScore - second.confidenceScore) : 1;
-  const highExact = top.confidenceScore >= 0.9 && gap >= 0.2 && top.ingredientsStatus === 'available' && top.nameSimilarity >= 0.85;
-  let confidence = 'low';
-  let state = 'candidate_list';
-  let decisionReason = 'ambiguous';
-  let autoResolved = false;
-  if (highExact) {
-    confidence = 'high';
-    state = 'resolved_high';
-    decisionReason = 'exact_high';
-    autoResolved = true;
-  } else if (top.confidenceScore >= 0.62 && gap >= 0.12) {
-    confidence = 'medium';
-    state = 'resolved_medium';
-    decisionReason = gap < 0.15 ? 'low_gap' : 'ambiguous';
-  } else if (gap < 0.12) {
-    decisionReason = 'low_gap';
-  }
-  top.confidence = confidence;
-  top.needsConfirmation = confidence !== 'high';
-  top.scoreGap = Number(gap.toFixed(3));
-  trackEvent('search_confidence_assigned', {
-    confidence,
-    topScore: Number(top.confidenceScore.toFixed(2)),
-    candidateCount: ranked.length,
-    decisionReason,
-    autoResolved
-  });
-  if (state === 'candidate_list') {
-    return {
-      state,
-      decisionReason,
-      autoResolved: false,
-      candidates: ranked.slice(0, 7).map((c, idx) => ({ ...c, confidence: idx === 0 ? 'medium' : 'low', needsConfirmation: true, scoreGap: Number((top.confidenceScore - c.confidenceScore).toFixed(3)) }))
-    };
-  }
-  return { state, product: top, decisionReason, autoResolved };
-}
-async function searchWebCandidates(query) {
-  const cached = cacheGet('webcand', query);
-  if (cached) return cached;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 22000);
-  try {
-    const res = await fetch(apiUrl(), {
-      method: 'POST',
-      headers: authHeaders(),
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1000,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        messages: [{
-          role: 'user',
-          content: 'Find up to 5 likely cosmetic product matches for: ' + query.replace(/"/g, '') +
-            '\nRespond as raw JSON array only:' +
-            '\n[{"name":"...","brand":"...","category":"...","imageUrl":"...","ingredientsAvailable":true}]'
-        }]
-      })
-    });
-    clearTimeout(timer);
-    const data = await res.json();
-    if (!res.ok || data.error) return [];
-    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
-    const match = text.replace(/```json|```/gi, '').match(/\[[\s\S]*\]/);
-    if (!match) return [];
-    const parsed = JSON.parse(match[0]);
-    const out = (parsed || []).map(p => ({
-      name: p.name || '',
-      brand: p.brand || '',
-      category: p.category || '',
-      img: p.imageUrl || '',
-      ingredientsText: '',
-      ingredientsStatus: p.ingredientsAvailable ? 'available' : 'missing',
-      source: 'web'
-    })).filter(p => p.name);
-    cacheSet('webcand', query, out);
-    return out;
-  } catch (_) {
-    clearTimeout(timer);
-    return [];
-  }
-}
-function dedupeCandidates(candidates) {
-  const seen = new Set();
-  return candidates.filter(c => {
-    const k = normalizeQuery((c.brand || '') + ' ' + (c.name || ''));
-    if (!k || seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
 }
 function cleanCandidateText(v, max = 180) {
   return String(v || '')
@@ -2081,36 +1780,11 @@ function mapBackendProduct(p) {
     source: 'backend-index'
   };
 }
-async function resolveProductLocal(query, options = {}) {
-  const normalizedQuery = normalizeQuery(query);
-  const correctedQuery = applyFuzzyCorrection(normalizedQuery);
-  const usedFuzzy = correctedQuery !== normalizedQuery;
-  const lookups = await Promise.allSettled([searchOBF(correctedQuery), searchINCI(correctedQuery)]);
-  let candidates = [];
-  let hadAnySuccess = false;
-  lookups.forEach(r => {
-    if (r.status === 'fulfilled') {
-      hadAnySuccess = true;
-      candidates.push(...(r.value || []));
-    }
-  });
-  candidates = dedupeCandidates(candidates);
-  let ranked = rankCandidates(candidates, correctedQuery, usedFuzzy);
-  let classified = classifyResolution(ranked);
-  if ((classified.state === 'not_found' || classified.state === 'candidate_list') && options.includeWebFallback) {
-    const webCandidates = await searchWebCandidates(correctedQuery);
-    candidates = dedupeCandidates([...candidates, ...webCandidates]);
-    ranked = rankCandidates(candidates, correctedQuery, usedFuzzy);
-    classified = classifyResolution(ranked);
-  }
-  if (classified.state === 'not_found' && !hadAnySuccess) return { state: 'error', normalizedQuery: correctedQuery, appliedFuzzyCorrection: usedFuzzy };
-  return { ...classified, normalizedQuery: correctedQuery, appliedFuzzyCorrection: usedFuzzy };
-}
 async function resolveProductFromBackend(query, options = {}) {
   const locale = (navigator.language || 'en-US');
   const region = (locale.split('-')[1] || '').toUpperCase();
   const endpoint = options.fast ? '/resolver/products/fast' : '/resolver/products';
-  const timeoutMs = Number(options.timeoutMs || (options.fast ? 1800 : 12000));
+  const timeoutMs = Number(options.timeoutMs || (options.fast ? 1500 : 5000));
   const externalSignal = options.abortController?.signal || null;
   const bases = resolverBaseUrls();
 
@@ -2191,7 +1865,6 @@ async function triggerSuggest(query) {
   const requestId = ++latestSuggestRequestId;
   setSearchState('searching', { query });
   const resolution = await resolveProduct(query, {
-    includeWebFallback: false,
     forSuggest: true,
     abortController: activeSuggestAbortController
   });
@@ -2283,19 +1956,11 @@ async function sendCandidateSelectionFeedback(payload) {
 async function enrichCandidateIngredients(candidate, options = {}) {
   const q = [candidate.brand, candidate.name].filter(Boolean).join(' ').trim() || candidate.name;
   if (!q) return candidate;
-  const direct = await resolveIngredientsDirectSources(candidate);
-  if (direct?.ingredientsText) {
-    if (candidate.productId) {
-      persistResolvedIngredients({
-        ...candidate,
-        ingredientsText: direct.ingredientsText
-      }, direct.source || 'direct');
-    }
-    return direct;
-  }
-  if (options.preferDirectOnly) return candidate;
   if (candidate.productId) {
-    const backendResolved = await tryBackendIngredientResolution(candidate, q);
+    const backendResolved = await tryBackendIngredientResolution(candidate, q, {
+      mode: 'deterministic',
+      forceRetry: !!options.forceRetry
+    });
     if (backendResolved?.ingredientsText) return backendResolved;
   }
   return candidate;
@@ -2310,6 +1975,7 @@ async function persistResolvedIngredients(product, source = 'manual') {
         productId: product.productId,
         ingredientsText: product.ingredientsText,
         ingredientsSource: source,
+        mode: 'deterministic',
         query: [product.brand, product.name].filter(Boolean).join(' ').trim(),
         locale: navigator.language || 'en-US',
         region: ((navigator.language || 'en-US').split('-')[1] || '').toUpperCase()
@@ -2353,6 +2019,7 @@ async function tryBackendIngredientResolution(product, queryText = '', options =
         productId: product.productId,
         query: queryText || [product.brand, product.name].filter(Boolean).join(' ').trim(),
         forceRetry: !!options.forceRetry,
+        mode: options.mode || 'deterministic',
         locale: navigator.language || 'en-US',
         region: ((navigator.language || 'en-US').split('-')[1] || '').toUpperCase()
       })
@@ -2367,7 +2034,7 @@ async function tryBackendIngredientResolution(product, queryText = '', options =
 async function showProductNeedsIngredients(product, options = {}) {
   let resolved = null;
   if (product?.productId && !options.skipAutoTry) {
-    resolved = await tryBackendIngredientResolution(product);
+    resolved = await tryBackendIngredientResolution(product, '', { mode: 'deterministic' });
     if (resolved?.ingredientsText) {
       trackEvent('analysis_autostart_after_enrichment', { productId: product.productId, name: resolved.name || product.name });
       await runAnalysis(resolved.name || product.name, resolved.brand || product.brand || '', resolved.ingredientsText, 'resolver', resolved.img || product.img || '', resolved.category || product.category || '');
@@ -2396,7 +2063,7 @@ async function retryIngredientFetch() {
   document.getElementById('results').classList.remove('show');
   document.getElementById('loading').classList.add('show');
   setLoading('Found product. Retrieving ingredients…', 'This usually takes a few seconds');
-  const resolved = await tryBackendIngredientResolution(selectedProduct, '', { forceRetry: true });
+  const resolved = await tryBackendIngredientResolution(selectedProduct, '', { forceRetry: true, mode: 'deterministic' });
   if (resolved?.ingredientsText) {
     trackEvent('analysis_autostart_after_enrichment', { productId: selectedProduct.productId, name: resolved.name || selectedProduct.name });
     await runAnalysis(resolved.name || selectedProduct.name, resolved.brand || selectedProduct.brand || '', resolved.ingredientsText, 'resolver', resolved.img || selectedProduct.img || '', resolved.category || selectedProduct.category || '');
@@ -2455,6 +2122,7 @@ function prefetchSuggestionIngredients(products = []) {
         productId: p.productId,
         query: [p.brand, p.name].filter(Boolean).join(' ').trim(),
         forceRetry: false,
+        mode: 'deterministic',
         locale: navigator.language || 'en-US',
         region: ((navigator.language || 'en-US').split('-')[1] || '').toUpperCase()
       })
@@ -2505,69 +2173,6 @@ async function pickProduct(i) {
   }
   sendSelectionFeedback(false, false);
   showProductNeedsIngredients(p);
-}
-
-async function resolveIngredientsDirectSources(product) {
-  const q = [product?.brand, product?.name].filter(Boolean).join(' ').trim() || String(product?.name || '').trim();
-  if (!q) return null;
-
-  const tasks = [
-    (async () => {
-      try {
-        const obf = await searchOBF(q);
-        const best = (obf || []).find(x => String(x.ingredientsText || '').trim().length > 20);
-        if (!best) return null;
-        return {
-          ...product,
-          name: best.name || product.name,
-          brand: best.brand || product.brand || '',
-          category: best.category || product.category || '',
-          img: best.img || product.img || '',
-          ingredientsText: best.ingredientsText,
-          ingredientsStatus: 'available',
-          source: 'obf-direct'
-        };
-      } catch (_) {
-        return null;
-      }
-    })(),
-    (async () => {
-      try {
-        const inci = await fetchInciIngredients(q, true);
-        if (!inci?.ingredients) return null;
-        return {
-          ...product,
-          name: inci.productName || product.name,
-          brand: inci.brand || product.brand || '',
-          ingredientsText: inci.ingredients,
-          ingredientsStatus: 'available',
-          source: 'inci-direct'
-        };
-      } catch (_) {
-        return null;
-      }
-    })()
-  ];
-
-  const settled = await Promise.allSettled(tasks);
-  const candidates = settled
-    .filter(item => item.status === 'fulfilled' && item.value?.ingredientsText)
-    .map(item => item.value);
-  if (!candidates.length) return null;
-
-  const ranked = candidates
-    .map(entry => {
-      const tokenCount = parseIngredients(entry.ingredientsText || '').length;
-      const source = String(entry.source || '').toLowerCase();
-      const sourceWeight = source.includes('inci') ? 0.18 : source.includes('obf') ? 0.14 : 0.1;
-      const score = sourceWeight + Math.min(tokenCount / 120, 0.22);
-      return { entry, tokenCount, score };
-    })
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return b.tokenCount - a.tokenCount;
-    });
-  return ranked[0].entry;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2829,7 +2434,7 @@ async function analyzeFromProductUrl(productUrl) {
 
   for (const q of queryCandidates) {
     setLoading('Reading product page…', 'Extracting product identity');
-    const resolution = await resolveProduct(q, { includeWebFallback: true, forSuggest: false });
+    const resolution = await resolveProduct(q, { forSuggest: false });
     const candidate = resolution?.product || (resolution?.candidates || [])[0];
     const identity = candidate || {
       name: q,
@@ -2839,7 +2444,7 @@ async function analyzeFromProductUrl(productUrl) {
       productId: ''
     };
     setLoading('Retrieving ingredients…', 'Using INCI + OBF sources');
-    const enriched = await enrichCandidateIngredients(identity, { preferDirectOnly: true });
+    const enriched = await enrichCandidateIngredients(identity);
     if (!enriched?.ingredientsText) continue;
     await runAnalysis(
       enriched.name || identity.name || q,
@@ -2910,7 +2515,7 @@ async function doScan() {
         return;
       }
       setLoading('Found product name in photo…', 'Looking up full ingredients');
-      const resolution = await resolveProduct(lookupQuery, { includeWebFallback: true, forSuggest: false });
+      const resolution = await resolveProduct(lookupQuery, { forSuggest: false });
       const product = resolution?.product || (resolution?.candidates || [])[0];
       if (product) {
         const enriched = await enrichCandidateIngredients(product);
@@ -2982,7 +2587,7 @@ async function doScan() {
     }
   } else {
     setLoading('Searching product…', 'Matching brand and product variants');
-    const resolution = await resolveProduct(inputVal, { includeWebFallback: true, forSuggest: false });
+    const resolution = await resolveProduct(inputVal, { forSuggest: false });
     if (resolution.state === 'error') {
       setSearchState('empty', { query: inputVal });
       document.getElementById('loading').classList.remove('show');
@@ -3072,58 +2677,6 @@ async function doScan() {
   await runAnalysis(productName, brand, ingredientsText, source, resultImage, resultCategory);
 }
 
-// ── googleIngredientsFallback: last-resort search for any product ──
-async function googleIngredientsFallback(query) {
-  const cached = cacheGet('google', query);
-  if (cached) return cached;
-  const allowedDomains = [
-    'incidecoder.com',
-    'world.openbeautyfacts.org',
-    'sephora.com',
-    'ulta.com',
-    'douglas.com',
-    'douglas.de',
-    'iciparisxl.com',
-    'yesstyle.com',
-    'stylevana.com',
-    'amazon.com',
-    'cultbeauty.com'
-  ];
-  const prompts = [
-    'Find the exact full INCI ingredient list for: ',
-    'Find the ingredient list from any trusted beauty retailer or official brand page for: ',
-    'Find this product and return ingredients only for: '
-  ];
-
-  for (const prefix of prompts) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 22000);
-    try {
-      const res = await fetch(apiUrl(), {
-        method: 'POST', headers: authHeaders(), signal: controller.signal,
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6', max_tokens: 1700,
-          tools: [{ type: 'web_search_20250305', name: 'web_search', allowed_domains: allowedDomains }],
-          messages: [{ role: 'user', content:
-            prefix + query.replace(/"/g, '') +
-            '\nReturn strictly:\nPRODUCT: <n>\nBRAND: <brand>\nINGREDIENTS: <comma-separated INCI list>\nIf unavailable, output INGREDIENTS: NOT_FOUND'
-          }],
-        }),
-      });
-      clearTimeout(timer);
-      const data = await res.json();
-      if (data.error) continue;
-      const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
-      const result = parseSearchResult(text, query);
-      if (result?.ingredients && result.ingredients.toUpperCase() !== 'NOT_FOUND') {
-        cacheSet('google', query, result);
-        return result;
-      }
-    } catch(e) { clearTimeout(timer); }
-  }
-  return null;
-}
-
 // ── parseIngredients: split INCI string into individual ingredient names ──
 function parseIngredients(text) {
   // Normalize line endings and common OCR artifacts
@@ -3207,49 +2760,103 @@ function logUnknownIngredients(unknownIngredients, source) {
   }
 }
 
+async function analyzeIngredientsWithBackend(ingredientsText, profile) {
+  try {
+    const res = await fetch(resolverUrl('/resolver/analyze-ingredients'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ingredientsText,
+        profile: {
+          primary: profile?.primary || 'normal',
+          conditions: Array.isArray(profile?.conditions) ? profile.conditions : []
+        }
+      })
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data?.ok) return null;
+    return data;
+  } catch (_) {
+    return null;
+  }
+}
+
+function mapBackendCategoryToUi(cat) {
+  const key = String(cat?.key || '');
+  const flagged = Array.isArray(cat?.flagged) ? cat.flagged : [];
+  if (key === 'acne') {
+    return {
+      ...cat,
+      key,
+      name: 'Pore-clogging & heavy',
+      desc: flagged.length ? null : 'No pore-clogging or occlusive ingredients found.'
+    };
+  }
+  if (key === 'reactive') {
+    return {
+      ...cat,
+      key,
+      name: 'Irritants & sensitisers',
+      desc: flagged.length ? null : 'No known irritants or sensitisers detected.'
+    };
+  }
+  if (key === 'dry') {
+    return {
+      ...cat,
+      key,
+      name: 'Drying / stripping',
+      desc: flagged.length ? null : 'No harsh drying agents detected.'
+    };
+  }
+  return {
+    ...cat,
+    key: 'allergen',
+    isAllergen: true,
+    informationalOnly: !!cat?.informationalOnly,
+    name: 'EU allergens',
+    desc: flagged.length
+      ? (cat?.informationalOnly ? 'Shown for awareness; not included in overall score for this profile.' : null)
+      : 'No EU-listed allergens detected.'
+  };
+}
+
 // ── runAnalysis: shared analysis path (text search + photo both end up here) ──
 async function runAnalysis(productName, brand, ingredientsText, source, resultImage = '', resultCategory = '') {
   try {
-    setLoading('Analyzing ingredients…', 'Checking 2,200+ ingredient database');
+    setLoading('Analyzing ingredients…', 'Applying your skin profile');
     await new Promise(r => setTimeout(r, 80));
 
-    const ingredients = parseIngredients(ingredientsText);
+    const analysis = await analyzeIngredientsWithBackend(ingredientsText, skinProfile);
+    if (!analysis) {
+      throw new Error('analysis_unavailable');
+    }
+
+    const ingredients = parseIngredients(analysis.ingredientsTextNormalized || ingredientsText);
     if (!ingredients.length) { showNotFound(productName); return; }
 
     const skinTypes = profileToSkinTypes(skinProfile);
     const profileMode = profileModeFromProfile(skinProfile);
-    const noSkinWarning = profileMode === 'none';
-
-    // ── DB lookup — instant, no API call ──
-    const aiFlags = claudeIngredientCheck(ingredients, skinTypes);
-
-    const unknownIngredients = (aiFlags._unknown || []).filter(u => {
-      if (!u) return false;
-      if (/(read all the geeky details|learn more|click here|ingredients explained|here\s*>>?)/i.test(String(u))) return false;
-      const resolved = resolveIngredient(u);
-      return !resolved?.data;
-    });
-    const cats = buildCats(skinTypes, profileMode, aiFlags, skinProfile);
-    const unknownCount = unknownIngredients.length;
-    let overall = cats.length ? overallScore(cats, unknownCount, ingredients.length) : 5;
-    // Acne-prone guardrail: any flagged acne-risk ingredient prevents a perfect score.
-    const acneCat = cats.find(c => c.key === 'acne');
-    const acneProneProfile = (skinProfile.conditions || []).includes('acne-prone');
-    if (acneProneProfile && acneCat && acneCat.flagged.length > 0 && overall >= 5) {
-      overall = 4.9;
-    }
-    // Unknowns reduce confidence first; apply only a tiny score nudge for acne-prone users.
-    if (acneProneProfile && unknownCount > 0) {
-      const unknownPenalty = Math.min(0.2, unknownCount * 0.05);
-      overall = Math.max(1, Number((overall - unknownPenalty).toFixed(1)));
-    }
-    const verdict = verdictFromScore(overall);
+    const cats = (analysis.categories || []).map(mapBackendCategoryToUi);
+    const unknownIngredients = Array.isArray(analysis.unknownIngredients) ? analysis.unknownIngredients : [];
+    const overall = Number(analysis.overall || 5);
+    const verdict = String(analysis.verdict || verdictFromScore(overall));
+    const confLabelRaw = String(analysis?.confidence?.label || 'high');
+    const confLabel = confLabelRaw.charAt(0).toUpperCase() + confLabelRaw.slice(1).toLowerCase();
+    const confPct = Number(analysis?.confidence?.pct || 1);
+    const aiFlags = {
+      acne: (cats.find(c => c.key === 'acne')?.flagged || []),
+      sensitive: (cats.find(c => c.key === 'reactive')?.flagged || []),
+      dry: (cats.find(c => c.key === 'dry')?.flagged || []),
+      allergens: (cats.find(c => c.key === 'allergen')?.flagged || []),
+      _unknown: unknownIngredients,
+      _matchTypeCounts: analysis.matchTypeCount || {}
+    };
 
     lastAnalysisData = { productName, brand, ingredientsText, source, resultImage, resultCategory };
     logUnknownIngredients(unknownIngredients, source);
-    trackEvent('ingredient_match_type_count', aiFlags._matchTypeCounts || {});
-    const { label: confLabel, pct: confPct } = coverageConfidence(ingredients.length, unknownCount);
-    renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes, noSkinWarning, profileMode, dataSource: 'db', unknownIngredients, aiFlags, confLabel, confPct, resultImage, resultCategory, skinProfile });
+    trackEvent('ingredient_match_type_count', analysis.matchTypeCount || {});
+    renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes, profileMode, dataSource: 'db', unknownIngredients, aiFlags, confLabel, confPct, resultImage, resultCategory, skinProfile });
     if (!hasSeenOnboarding()) {
       markOnboardingSeen();
       applyOnboardingUi();
@@ -3380,11 +2987,14 @@ function buildCats(skinTypes, profileMode, aiFlags, skinProfileInput) {
   }
 
   const allergens = get('allergens');
-  const allergenWeight = profileMode === 'none' ? 0.6 : 1.0;
+  const allergenInOverall = isSensitive;
+  const allergenWeight = allergenInOverall ? 1.0 : 0;
   cats.push({ key:'allergen', name:'EU allergens',
-    desc: allergens.length === 0 ? 'No EU-listed allergens detected.' : null,
+    desc: allergens.length === 0
+      ? 'No EU-listed allergens detected.'
+      : (allergenInOverall ? null : 'Shown for awareness; not included in overall score for this profile.'),
     flagged: allergens, score: genericSafetyScore(allergens), weight: allergenWeight,
-    isAllergen: true });
+    isAllergen: true, informationalOnly: !allergenInOverall });
 
   return cats;
 }
@@ -3419,7 +3029,7 @@ function showNotFound(name) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // RENDER
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes, noSkinWarning, profileMode, dataSource, unknownIngredients, confLabel, confPct, resultImage, resultCategory, skinProfile }) {
+function renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes, profileMode, dataSource, unknownIngredients, confLabel, confPct, resultImage, resultCategory, skinProfile }) {
   document.getElementById('loading').classList.remove('show');
 
   const skinLabels = { 'acne-prone':'Acne-prone','sensitive':'Sensitive / Reactive','dry':'Dry','normal':'Normal','oily':'Oily','combination':'Combination' };
@@ -3432,7 +3042,6 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
     : '';
   // avoid title: driven by the worst-scoring category, not just what skin types are selected
   const _avoidTitle = (() => {
-    if (noSkinWarning) return 'Allergens detected';
     // Find the category with the lowest score
     const worstCat = cats.length
       ? cats.reduce((a, b) => a.score <= b.score ? a : b)
@@ -3453,9 +3062,9 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
   })();
 
   const verdictMeta = {
-    safe:    { icon: '✓', title: 'Looks good',       desc: noSkinWarning ? 'No EU allergens detected. Select a skin type above for a full analysis.' : `No significant concerns detected for your skin type.${_capNote}` },
-    caution: { icon: '!', title: 'Use with caution', desc: noSkinWarning ? 'Some EU allergens present — check if you are sensitive to these. Select a skin type for a full analysis.' : `Some ingredients may be problematic — review the details below.${_capNote}` },
-    avoid:   { icon: '✕', title: _avoidTitle,        desc: noSkinWarning ? 'Multiple EU allergens found. Select a skin type above for full pore-clogging and irritant analysis.' : `Multiple ingredients are likely problematic for your skin type.${_capNote}` },
+    safe:    { icon: '✓', title: 'Looks good',       desc: `No significant concerns detected for your skin type.${_capNote}` },
+    caution: { icon: '!', title: 'Use with caution', desc: `Some ingredients may be problematic — review the details below.${_capNote}` },
+    avoid:   { icon: '✕', title: _avoidTitle,        desc: `Multiple ingredients are likely problematic for your skin type.${_capNote}` },
   }[verdict];
 
   // Category rows — bar + plain-text flagged list
@@ -3532,7 +3141,7 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
       <div class="${rowClass}">
         <div class="cat-top">
           <span class="cat-name">${c.name}</span>
-          ${scoreDisplay}
+          ${scoreDisplay}${c.informationalOnly ? '<span style="font-size:10px;color:rgba(26,20,16,0.45);margin-left:6px">info-only</span>' : ''}
         </div>
         <div class="cat-bar-track"><div class="cat-bar-fill ${cls}" style="width:${pct}%"></div></div>
         ${flagHTML
@@ -3608,12 +3217,9 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
         </div>
       </div>
       <div style="text-align:right;flex-shrink:0">
-        ${noSkinWarning
-          ? `<div class="verdict-score" style="font-size:22px;opacity:0.35">—</div>
-             <div class="verdict-score-denom">no skin type</div>`
-          : `<div class="verdict-score">${overall.toFixed(1)}</div>
-             <div class="verdict-score-denom">out of 5</div>
-             <div style="font-size:9px;opacity:0.4;margin-top:2px;text-align:right;line-height:1.3">higher = safer</div>`}
+        <div class="verdict-score">${overall.toFixed(1)}</div>
+        <div class="verdict-score-denom">out of 5</div>
+        <div style="font-size:9px;opacity:0.4;margin-top:2px;text-align:right;line-height:1.3">higher = safer</div>
       </div>
     </div>
 
@@ -3626,10 +3232,6 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
         : '<span class="r-skin-pill">None</span>'}
     </div>
 
-    ${noSkinWarning ? `<div style="background:#FDF3E3;border-radius:10px;padding:12px 15px;margin-bottom:14px;font-size:12.5px;color:#9A6500;line-height:1.5">
-      <strong>No skin concern selected.</strong> Only EU allergens are being checked.
-      Select a skin type above for a full analysis.
-    </div>` : ''}
     ${summaryHtml}
     ${profileMode === 'normal' ? `<div style="background:#F6E9DE;border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px;color:#8D471F;line-height:1.5">
       <strong>General profile analysis.</strong> Balanced thresholds are applied for normal skin.
