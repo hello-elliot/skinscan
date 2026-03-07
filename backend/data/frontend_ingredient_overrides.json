@@ -519,6 +519,126 @@
       "al": 0,
       "safe": null,
       "func": "fragrance/essential oil"
+    },
+    "3-O-ETHYL ASCORBIC ACID": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "antioxidant/brightening"
+    },
+    "MILK PROTEIN": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning"
+    },
+    "LACTOSE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "humectant/skin conditioning"
+    },
+    "SILYBUM MARIANUM (MILK THISTLE) SEED OIL": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient/antioxidant"
+    },
+    "CUCUMIS SATIVUS (CUCUMBER) SEED OIL": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient"
+    },
+    "CHAMOMILLA RECUTITA (MATRICARIA) FLOWER OIL": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": null,
+      "func": "essential oil/soothing"
+    },
+    "4-TERPINEOL": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": null,
+      "func": "fragrance component/antimicrobial"
+    },
+    "AMBER POWDER": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": null,
+      "func": "absorbent/opacifier"
+    },
+    "AMINO ESTERS-1": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning"
+    },
+    "SEBACIC ACID": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "pH adjuster"
+    },
+    "HYDROXYPROPYL TETRAHYDROPYRANTRIOL": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "anti-aging/skin conditioning"
+    },
+    "AMMONIUM POLYACRYLOYLDIMETHYL TAURATE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "thickener/stabilizer"
+    },
+    "PEG-20 METHYL GLUCOSE SESQUISTEARATE": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "DEXTRIN": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "binder/film former"
+    },
+    "CITRUS NOBILIS PEEL OIL": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": null,
+      "func": "fragrance/essential oil"
     }
   },
   "aliases": {
@@ -598,7 +718,17 @@
     "CITRUS AURANTIUM AMARA FLOWER OIL": "CITRUS AURANTIUM AMARA (BITTER ORANGE) FLOWER OIL",
     "BITTER ORANGE FLOWER OIL": "CITRUS AURANTIUM AMARA (BITTER ORANGE) FLOWER OIL",
     "CITRUS AURANTIUM DULCIS PEEL OIL": "CITRUS AURANTIUM DULCIS (ORANGE) PEEL OIL",
-    "ORANGE PEEL OIL": "CITRUS AURANTIUM DULCIS (ORANGE) PEEL OIL"
+    "ORANGE PEEL OIL": "CITRUS AURANTIUM DULCIS (ORANGE) PEEL OIL",
+    "3-0-ETHYL ASCORBIC ACID": "3-O-ETHYL ASCORBIC ACID",
+    "ETHYL ASCORBIC ACID": "3-O-ETHYL ASCORBIC ACID",
+    "CHAMOMILLA RECUTITA (MATRICARIA) FLOWER OIL": "CHAMOMILLA RECUTITA (MATRICARIA) FLOWER OIL",
+    "MATRICARIA FLOWER OIL": "CHAMOMILLA RECUTITA (MATRICARIA) FLOWER OIL",
+    "MILK THISTLE SEED OIL": "SILYBUM MARIANUM (MILK THISTLE) SEED OIL",
+    "CUCUMBER SEED OIL": "CUCUMIS SATIVUS (CUCUMBER) SEED OIL",
+    "AMMONIUM POLYACRYLOYLDIMETHYLTAURATE": "AMMONIUM POLYACRYLOYLDIMETHYL TAURATE",
+    "PEG-20 METHYL GLUCOSE SESQUISTEARATE": "PEG-20 METHYL GLUCOSE SESQUISTEARATE",
+    "CITRUS NOBILIS PEEL OIL / MANDARIN ORANGE PEEL OIL": "CITRUS NOBILIS PEEL OIL",
+    "MANDARIN ORANGE PEEL OIL": "CITRUS NOBILIS PEEL OIL"
   },
   "synonyms": {
     "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
@@ -677,7 +807,17 @@
     "CITRUS AURANTIUM AMARA FLOWER OIL": "CITRUS AURANTIUM AMARA (BITTER ORANGE) FLOWER OIL",
     "BITTER ORANGE FLOWER OIL": "CITRUS AURANTIUM AMARA (BITTER ORANGE) FLOWER OIL",
     "CITRUS AURANTIUM DULCIS PEEL OIL": "CITRUS AURANTIUM DULCIS (ORANGE) PEEL OIL",
-    "ORANGE PEEL OIL": "CITRUS AURANTIUM DULCIS (ORANGE) PEEL OIL"
+    "ORANGE PEEL OIL": "CITRUS AURANTIUM DULCIS (ORANGE) PEEL OIL",
+    "3-0-ETHYL ASCORBIC ACID": "3-O-ETHYL ASCORBIC ACID",
+    "ETHYL ASCORBIC ACID": "3-O-ETHYL ASCORBIC ACID",
+    "CHAMOMILLA RECUTITA (MATRICARIA) FLOWER OIL": "CHAMOMILLA RECUTITA (MATRICARIA) FLOWER OIL",
+    "MATRICARIA FLOWER OIL": "CHAMOMILLA RECUTITA (MATRICARIA) FLOWER OIL",
+    "MILK THISTLE SEED OIL": "SILYBUM MARIANUM (MILK THISTLE) SEED OIL",
+    "CUCUMBER SEED OIL": "CUCUMIS SATIVUS (CUCUMBER) SEED OIL",
+    "AMMONIUM POLYACRYLOYLDIMETHYLTAURATE": "AMMONIUM POLYACRYLOYLDIMETHYL TAURATE",
+    "PEG-20 METHYL GLUCOSE SESQUISTEARATE": "PEG-20 METHYL GLUCOSE SESQUISTEARATE",
+    "CITRUS NOBILIS PEEL OIL / MANDARIN ORANGE PEEL OIL": "CITRUS NOBILIS PEEL OIL",
+    "MANDARIN ORANGE PEEL OIL": "CITRUS NOBILIS PEEL OIL"
   },
   "familyRules": []
 }
