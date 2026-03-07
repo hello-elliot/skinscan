@@ -1078,6 +1078,8 @@ function applySkinChipUI() {
 }
 function setPrimarySkinType(nextPrimary) {
   skinProfile.primary = PRIMARY_SKIN_TYPES.has(nextPrimary) ? nextPrimary : 'normal';
+  // "Normal" is mutually exclusive with explicit concern conditions.
+  if (skinProfile.primary === 'normal') skinProfile.conditions = [];
 }
 function toggleConditionSkinType(condition) {
   if (!CONDITION_SKIN_TYPES.has(condition)) return;
@@ -1085,6 +1087,8 @@ function toggleConditionSkinType(condition) {
   if (has) {
     skinProfile.conditions = skinProfile.conditions.filter(c => c !== condition);
   } else {
+    // Selecting any condition means profile is no longer "normal".
+    if (skinProfile.primary === 'normal') skinProfile.primary = 'combination';
     skinProfile.conditions = [...new Set([...skinProfile.conditions, condition])];
   }
 }
