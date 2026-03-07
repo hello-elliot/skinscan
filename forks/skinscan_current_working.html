@@ -341,6 +341,10 @@
     .skin-quiz-overlay { padding: 8px; }
     .skin-quiz-sheet { border-radius: 12px; }
   }
+  @media (min-width: 768px) {
+    .skin-quiz-overlay { align-items: center; padding: 20px; }
+    .skin-quiz-sheet { width: min(560px, 100%); border-radius: 16px; }
+  }
   /* Prevent iOS bounce / overscroll on the app shell */
   html { height: 100%; overflow-y: scroll; -webkit-overflow-scrolling: touch; }
   /* Remove blue tap highlight globally on mobile */
@@ -386,7 +390,10 @@
     <button class="chip" data-type="oily">Oily</button>
     <button class="chip" data-type="combination">Combination</button>
   </div>
-  <div style="font-size:11px;color:rgba(26,20,16,0.42);margin:2px 0 7px 2px;letter-spacing:.01em">Conditions</div>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:2px 0 7px 2px">
+    <div style="font-size:11px;color:rgba(26,20,16,0.42);letter-spacing:.01em">Conditions</div>
+    <button class="skin-quiz-trigger" id="skinQuizTrigger" type="button" style="margin:0">Not sure? Find my skin profile</button>
+  </div>
   <div class="skin-chips" id="skinChipsConditions" style="margin-bottom:14px">
     <button class="chip" data-type="acne-prone">Acne-prone</button>
     <button class="chip" data-type="sensitive">Sensitive / Reactive</button>
@@ -394,7 +401,6 @@
   <div id="skinHint" style="font-size:11px;color:rgba(196,98,45,0.65);margin:-4px 0 6px 2px;display:none">
     ↑ Normal cannot be combined with acne-prone or sensitive/reactive.
   </div>
-  <button class="skin-quiz-trigger" id="skinQuizTrigger" type="button">Not sure? Find my skin profile</button>
 
   <div id="inputSection">
     <div class="section-label">What product?</div>
@@ -1224,7 +1230,7 @@ function setSearchState(nextState, options = {}) {
     : nextState === 'unknown_brand_no_candidates'
       ? 'No close match yet. Add product URL below for fast indexing.'
     : nextState === 'empty'
-      ? 'No instant suggestion yet. Press Enter to run full search.'
+      ? 'No quick match yet. Press Analyze for full search.'
       : 'Search temporarily unavailable. You can still paste ingredients.';
   const statusClass = nextState === 'error' ? 'sug-status error' : 'sug-status';
   suggestionsEl.innerHTML = `<div class="${statusClass}">${nextState === 'searching' ? '<span class="mini-spinner"></span>' : ''}<span>${escHtml(statusText)}</span></div>`;
@@ -2242,9 +2248,8 @@ async function triggerSuggest(query) {
       setSearchState('results', { query });
       return;
     }
-    showCandidateStatusMessage('No close match yet. Keep typing or press Analyze to add product URL.');
     hideAddProductCapture();
-    setSearchState('empty', { query });
+    setSearchState('idle', { query });
     return;
   }
   if (resolution.state === 'candidate_list' && resolution.candidates?.length) {
@@ -2260,8 +2265,7 @@ async function triggerSuggest(query) {
     setSearchState('results', { query });
     return;
   }
-  setSearchState('empty', { query });
-  trackEvent('search_no_match', { query, decisionReason: resolution.decisionReason || '' });
+  setSearchState('idle', { query });
 }
 async function sendCandidateSelectionFeedback(payload) {
   if (!payload?.selectedProductId) return;
@@ -2413,16 +2417,15 @@ function showSuggestions(products, options = {}) {
     shownCandidateProductIds: normalized.map(p => p.productId).filter(Boolean).slice(0, 10)
   };
   suggestionsEl.innerHTML = normalized.map((p, i) => {
-    const badgeText = confirmMode && i === 0 ? 'Confirm this product?' : '';
-    const badgeTone = confirmMode && i === 0 ? 'inci' : (p.confidence === 'high' ? 'obf' : 'inci');
+    const confirmHint = confirmMode && i === 0 ? '<div class="sug-brand" style="color:var(--terra)">Tap to confirm this product</div>' : '';
     return `
       <div class="sug-item" onclick="pickProduct(${i})">
         ${p.img ? `<img class="sug-thumb" src="${escHtml(p.img)}" alt="" onerror="this.style.display='none'">` : `<div class="sug-thumb-empty">◈</div>`}
         <div class="sug-info">
           <div class="sug-name">${escHtml([p.brand, p.name].filter(Boolean).join(' — ') || p.name || p.brand || 'Product')}</div>
           ${p.category ? `<div class="sug-brand">${escHtml(p.category)}</div>` : ''}
+          ${confirmHint}
         </div>
-        ${badgeText ? `<span class="sug-badge ${badgeTone}">${badgeText}</span>` : ''}
       </div>`;
   }).join('');
   suggestionsEl.classList.add('show');
@@ -3365,6 +3368,21 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
     <div style="background:#FDF3E3;border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px;color:#9A6500;line-height:1.5">
       Acne-prone mode is strict: when meaningful pore-clogging signals are present, score is capped and cannot stay perfect.
     </div>` : '';
+  const topRisks = cats
+    .filter(c => Array.isArray(c.flagged) && c.flagged.length > 0 && !c.isAllergen)
+    .sort((a, b) => a.score - b.score)
+    .flatMap(c => c.flagged.map(f => ({ name: f.name, reason: f.reason || c.name })))
+    .filter((v, idx, arr) => arr.findIndex(x => x.name === v.name) === idx)
+    .slice(0, 3);
+  const topGood = cats
+    .filter(c => Array.isArray(c.flagged) && c.flagged.length === 0 && !c.isAllergen)
+    .map(c => c.name)
+    .slice(0, 2);
+  const summaryHtml = (topRisks.length || topGood.length) ? `
+    <div style="background:#fff;border:1px solid rgba(26,20,16,0.08);border-radius:10px;padding:10px 12px;margin:0 0 12px">
+      ${topRisks.length ? `<div style="font-size:12px;color:rgba(26,20,16,0.78);line-height:1.45"><strong>Top watch-outs:</strong> ${topRisks.map(r => escHtml(r.name)).join(', ')}</div>` : ''}
+      ${topGood.length ? `<div style="font-size:12px;color:rgba(26,20,16,0.62);line-height:1.45;margin-top:${topRisks.length ? '5px' : '0'}"><strong>Looks good:</strong> ${topGood.map(escHtml).join(', ')}</div>` : ''}
+    </div>` : '';
 
   // Unknown ingredients section — plain list (no external links)
   const unknownHTML = unknown.length > 0 ? `
@@ -3432,6 +3450,7 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
       <strong>No skin concern selected.</strong> Only EU allergens are being checked.
       Select a skin type above for a full analysis.
     </div>` : ''}
+    ${summaryHtml}
     ${profileMode === 'normal' ? `<div style="background:#F6E9DE;border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px;color:#8D471F;line-height:1.5">
       <strong>General profile analysis.</strong> Balanced thresholds are applied for normal skin.
     </div>` : ''}
