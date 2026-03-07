@@ -2386,19 +2386,25 @@ async function getChemistNote(productName, ingredients, verdict, skinTypes, aiFl
 // This prevents "La Roche-Posay Toleriane Double Repair Face Moisturizer, SPF 30"
 // (1 comma, long tokens) from being misread as an ingredient list.
 function isPastedIngredientList(text) {
-  const commas = (text.match(/,/g) || []).length;
-  if (commas < 3) return false;
-  const tokens = text.split(',').map(t => t.trim()).filter(Boolean);
+  const value = String(text || '').trim();
+  if (!value) return false;
+  const normalized = value
+    .replace(/[•·●]/g, ',')
+    .replace(/\s+\/\s+/g, ', ')
+    .replace(/[;\n]/g, ',');
+  const tokens = normalized.split(',').map(t => t.trim()).filter(Boolean);
+  if (tokens.length < 6) return false;
   const avgLen = tokens.reduce((s, t) => s + t.length, 0) / tokens.length;
-  return avgLen < 32;  // INCI names average ~12 chars; product names much longer
+  const hasInciWords = /(aqua|water|glycerin|parfum|fragrance|acid|extract|alcohol|glycol|sodium|peg-|copolymer|crosspolymer|tocopherol|niacinamide|dimethicone|titanium dioxide)/i.test(normalized);
+  return avgLen < 40 && hasInciWords;
 }
 function isLikelyIngredientText(text) {
   const value = String(text || '').trim();
   if (!value) return false;
   if (isPastedIngredientList(value)) return true;
   const lineCount = value.split(/\r?\n/).map(x => x.trim()).filter(Boolean).length;
-  const separators = (value.match(/[,;\n]/g) || []).length;
-  const hasInciWords = /(aqua|water|glycerin|parfum|fragrance|acid|extract|alcohol|glycol|sodium|peg-|butylene|tocopherol|niacinamide)/i.test(value);
+  const separators = (value.match(/[,;\n•·●]/g) || []).length + (value.match(/\s+\/\s+/g) || []).length;
+  const hasInciWords = /(aqua|water|glycerin|parfum|fragrance|acid|extract|alcohol|glycol|sodium|peg-|butylene|tocopherol|niacinamide|copolymer|crosspolymer|dimethicone|dioxide)/i.test(value);
   return lineCount >= 4 || (separators >= 5 && hasInciWords);
 }
 function isLikelyProductUrl(text) {

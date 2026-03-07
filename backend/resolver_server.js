@@ -3962,6 +3962,20 @@ function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
       }
     }
   }
+  // Consistency guard: one moderate/non-top acne signal at high coverage should not collapse to low 4.x
+  // unless another active category (e.g., sensitive) is also materially risky.
+  if (isAcneProne && conf.pct >= 0.9) {
+    const acneSignals = flagged.acne || [];
+    const hasSingleNonHighAcneSignal = acneSignals.length === 1 && Number(acneSignals[0]?.acneVal || 0) < 4;
+    if (hasSingleNonHighAcneSignal) {
+      const hasOtherActiveRisk = categories.some(c =>
+        c.key !== 'acne' &&
+        Number(c.weight || 0) > 0 &&
+        Number(c.score || 5) < 4.5
+      );
+      if (!hasOtherActiveRisk) overall = Math.max(overall, 4.5);
+    }
+  }
   overall = Number(overall.toFixed(1));
 
   return {
