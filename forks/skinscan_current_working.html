@@ -2228,7 +2228,7 @@ function overallScore(cats, unknownCount, totalIngredients) {
 }
 function verdictFromScore(s) {
   // s is now a safety score: 5=excellent, 1=avoid
-  if (s >= 4.5) return 'safe';
+  if (s >= 4.1) return 'safe';
   if (s >= 3.5) return 'caution';
   return 'avoid';
 }

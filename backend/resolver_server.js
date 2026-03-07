@@ -3936,6 +3936,20 @@ function confidenceFromCoverage(total, unknown) {
   return { label: 'low', pct, cap: 2.5 };
 }
 
+function acneBandFloor(decisionBand) {
+  const map = {
+    none: 5.0,
+    single_moderate_low_placement: 4.6,
+    single_moderate_top: 4.3,
+    multi_moderate_low_placement: 4.0,
+    multi_moderate_with_top: 3.8,
+    single_high_non_top: 3.9,
+    high_top_bucket: 3.5,
+    multi_high_stacked: 3.0
+  };
+  return map[String(decisionBand || '')] ?? null;
+}
+
 function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
   const normalizedIngredients = normalizeIngredientText(ingredientsText || '');
   const tokens = ingredientTokens(normalizedIngredients);
@@ -4059,6 +4073,11 @@ function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
       }
     }
   }
+  // Acne-prone deterministic floors (high coverage): keep outputs consistent with defined acne bands.
+  if (isAcneProne && conf.pct >= 0.9 && !isSensitive) {
+    const floor = acneBandFloor(acneDecision.decisionBand);
+    if (floor !== null) overall = Math.max(overall, floor);
+  }
   // Consistency guard: one moderate/non-top acne signal at high coverage should not collapse to low 4.x
   // unless another active category (e.g., sensitive) is also materially risky.
   if (isAcneProne && conf.pct >= 0.9) {
@@ -4086,7 +4105,7 @@ function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
     matchTypeCount,
     categories,
     overall,
-    verdict: overall >= 4.5 ? 'safe' : overall >= 3.5 ? 'caution' : 'avoid',
+    verdict: overall >= 4.1 ? 'safe' : overall >= 3.5 ? 'caution' : 'avoid',
     acneDecisionBand: acneDecision.decisionBand || 'none',
     acneSignalSummary: acneDecision.signalSummary || { moderateCount: 0, highCount: 0, topBucketCount: 0 },
     unknownScoreAdjustment: {
