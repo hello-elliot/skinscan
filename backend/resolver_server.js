@@ -3774,26 +3774,59 @@ function genericSafetyFromFlags(flags = []) {
 }
 
 function acneSafetyFromFlags(flags = [], acneProne = false) {
-  if (!flags.length) return 5;
-  let burden = 0;
-  let moderateOrHigher = 0;
-  flags.forEach(f => {
-    const a = Number(f.acneVal || 0);
-    const posWeight = Number(f.positionWeight || 0.4);
-    if (a >= 5) burden += (acneProne ? 1.3 : 1.0) * posWeight;
-    else if (a === 4) burden += (acneProne ? 1.0 : 0.7) * posWeight;
-    else if (a === 3) burden += (acneProne ? 0.65 : 0.4) * posWeight;
-    else if (a === 2) burden += (acneProne ? 0.4 : 0.25) * posWeight;
-    if (a >= 2) moderateOrHigher += 1;
+  const signalFlags = (flags || []).filter(f => Number(f?.acneVal || 0) >= 2);
+  const moderateFlags = signalFlags.filter(f => {
+    const a = Number(f?.acneVal || 0);
+    return a === 2 || a === 3;
   });
-  let score = 1;
-  if (burden < 0.3) score = 5;
-  else if (burden < 0.8) score = 4;
-  else if (burden < 1.5) score = 3;
-  else if (burden < 2.2) score = 2;
-  if (moderateOrHigher >= 1) score = Math.min(score, 4);
-  if (acneProne && moderateOrHigher >= 3) score = Math.min(score, 3);
-  return score;
+  const highFlags = signalFlags.filter(f => Number(f?.acneVal || 0) >= 4);
+  const isTopBucket = (f) => Number(f?.positionWeight || 0.4) >= 0.95;
+  const topBucketCount = signalFlags.filter(isTopBucket).length;
+  const topBucketHighCount = highFlags.filter(isTopBucket).length;
+  const topBucketModerateCount = moderateFlags.filter(isTopBucket).length;
+
+  if (!signalFlags.length) {
+    return {
+      score: 5,
+      decisionBand: 'none',
+      signalSummary: { moderateCount: 0, highCount: 0, topBucketCount: 0 }
+    };
+  }
+
+  let score = acneProne ? 4.4 : 4.6;
+  let decisionBand = 'moderate_cluster';
+
+  if (moderateFlags.length === 1 && highFlags.length === 0) {
+    if (topBucketModerateCount > 0) {
+      score = 4.3;
+      decisionBand = 'single_moderate_top';
+    } else {
+      score = 4.6;
+      decisionBand = 'single_moderate_low_placement';
+    }
+  } else if (highFlags.length >= 2 || (highFlags.length >= 1 && moderateFlags.length >= 2)) {
+    score = 3.0;
+    decisionBand = 'multi_high_stacked';
+  } else if (topBucketHighCount >= 1) {
+    score = 3.5;
+    decisionBand = 'high_top_bucket';
+  } else if (moderateFlags.length >= 2) {
+    score = topBucketModerateCount > 0 ? 3.8 : 4.0;
+    decisionBand = topBucketModerateCount > 0 ? 'multi_moderate_with_top' : 'multi_moderate_low_placement';
+  } else if (highFlags.length === 1) {
+    score = 3.9;
+    decisionBand = 'single_high_non_top';
+  }
+
+  return {
+    score: Number(Math.max(1, Math.min(5, score)).toFixed(1)),
+    decisionBand,
+    signalSummary: {
+      moderateCount: moderateFlags.length,
+      highCount: highFlags.length,
+      topBucketCount
+    }
+  };
 }
 
 function confidenceFromCoverage(total, unknown) {
@@ -3872,7 +3905,8 @@ function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
     }
   });
 
-  const acneScore = acneSafetyFromFlags(flagged.acne, isAcneProne);
+  const acneDecision = acneSafetyFromFlags(flagged.acne, isAcneProne);
+  const acneScore = Number(acneDecision.score || 5);
   const sensitiveScore = genericSafetyFromFlags(flagged.sensitive);
   const dryScore = genericSafetyFromFlags(flagged.dry);
   const allergenScore = genericSafetyFromFlags(flagged.allergen);
@@ -3899,9 +3933,25 @@ function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
   const totalWeight = categories.reduce((sum, c) => sum + c.weight, 0) || 1;
   let overall = categories.reduce((sum, c) => sum + (c.score * c.weight), 0) / totalWeight;
   const conf = confidenceFromCoverage(tokens.length, unknown.length);
+  let unknownPenaltyAmount = 0;
+  let unknownPenaltyApplied = false;
+  let unknownPenaltyReason = 'none';
   if (conf.cap !== null) overall = Math.min(overall, Math.max(conf.cap, overall - 1.0));
   if (isAcneProne && flagged.acne.length > 0 && overall >= 5) overall = 4.9;
-  if (isAcneProne && unknown.length > 0) overall = Math.max(1, overall - Math.min(0.2, unknown.length * 0.05));
+  if (isAcneProne && unknown.length > 0) {
+    if (conf.pct >= 0.9) {
+      unknownPenaltyReason = 'confidence_only_high_coverage';
+    } else if (conf.pct >= 0.75) {
+      unknownPenaltyReason = 'confidence_cap_only_medium_coverage';
+    } else {
+      unknownPenaltyAmount = Math.min(0.2, unknown.length * 0.05);
+      if (unknownPenaltyAmount > 0) {
+        overall = Math.max(1, overall - unknownPenaltyAmount);
+        unknownPenaltyApplied = true;
+        unknownPenaltyReason = 'low_coverage_penalty_applied';
+      }
+    }
+  }
   overall = Number(overall.toFixed(1));
 
   return {
@@ -3915,7 +3965,14 @@ function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
     matchTypeCount,
     categories,
     overall,
-    verdict: overall >= 4 ? 'safe' : overall >= 3 ? 'caution' : 'avoid'
+    verdict: overall >= 4.5 ? 'safe' : overall >= 3.5 ? 'caution' : 'avoid',
+    acneDecisionBand: acneDecision.decisionBand || 'none',
+    acneSignalSummary: acneDecision.signalSummary || { moderateCount: 0, highCount: 0, topBucketCount: 0 },
+    unknownScoreAdjustment: {
+      applied: unknownPenaltyApplied,
+      reason: unknownPenaltyReason,
+      amount: Number(unknownPenaltyAmount.toFixed(2))
+    }
   };
 }
 

@@ -2218,8 +2218,8 @@ function overallScore(cats, unknownCount, totalIngredients) {
 }
 function verdictFromScore(s) {
   // s is now a safety score: 5=excellent, 1=avoid
-  if (s >= 4) return 'safe';
-  if (s >= 3) return 'caution';
+  if (s >= 4.5) return 'safe';
+  if (s >= 3.5) return 'caution';
   return 'avoid';
 }
 
@@ -2885,8 +2885,11 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
       const acneProneProfile = (skinProfile.conditions || []).includes('acne-prone');
       if (acneProneProfile && acneCat && acneCat.flagged.length > 0 && overall >= 5) overall = 4.9;
       if (acneProneProfile && unknownCount > 0) {
-        const unknownPenalty = Math.min(0.2, unknownCount * 0.05);
-        overall = Math.max(1, Number((overall - unknownPenalty).toFixed(1)));
+        const coveragePct = ingredients.length ? (ingredients.length - unknownCount) / ingredients.length : 1;
+        if (coveragePct < 0.75) {
+          const unknownPenalty = Math.min(0.2, unknownCount * 0.05);
+          overall = Math.max(1, Number((overall - unknownPenalty).toFixed(1)));
+        }
       }
       verdict = verdictFromScore(overall);
       const localConfidence = coverageConfidence(ingredients.length, unknownCount);
@@ -3102,9 +3105,13 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
     return titleMap[worstCat.key] || 'High risk';
   })();
 
+  const cautionTitle = overall >= 4 ? 'Use with caution' : 'High caution';
+  const cautionDesc = overall >= 4
+    ? `Some ingredients may be problematic — review the details below.${_capNote}`
+    : `Multiple concerns were detected for your profile — review details carefully before use.${_capNote}`;
   const verdictMeta = {
     safe:    { icon: '✓', title: 'Looks good',       desc: `No significant concerns detected for your skin type.${_capNote}` },
-    caution: { icon: '!', title: 'Use with caution', desc: `Some ingredients may be problematic — review the details below.${_capNote}` },
+    caution: { icon: '!', title: cautionTitle, desc: cautionDesc },
     avoid:   { icon: '✕', title: _avoidTitle,        desc: `Multiple ingredients are likely problematic for your skin type.${_capNote}` },
   }[verdict];
 
@@ -3198,10 +3205,18 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
     <div style="background:#FDF3E3;border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px;color:#9A6500;line-height:1.5">
       Acne-prone mode is strict: when meaningful pore-clogging signals are present, score is capped and cannot stay perfect.
     </div>` : '';
+  const concernLabel = (item) => {
+    const sev = String(item?.severity || '').toLowerCase();
+    const acneVal = Number(item?.acneVal || 0);
+    const pos = Number(item?.positionWeight || 0.4);
+    if (sev === 'high' || acneVal >= 4) return 'High concern';
+    if (acneVal === 2 && pos < 0.95) return 'Low concern';
+    return 'Moderate concern';
+  };
   const topRisks = cats
     .filter(c => Array.isArray(c.flagged) && c.flagged.length > 0 && !c.isAllergen)
     .sort((a, b) => a.score - b.score)
-    .flatMap(c => c.flagged.map(f => ({ name: f.name, reason: f.reason || c.name })))
+    .flatMap(c => c.flagged.map(f => ({ name: f.name, reason: f.reason || c.name, concern: concernLabel(f) })))
     .filter((v, idx, arr) => arr.findIndex(x => x.name === v.name) === idx)
     .slice(0, 3);
   const topGood = cats
@@ -3210,7 +3225,7 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
     .slice(0, 2);
   const summaryHtml = (topRisks.length || topGood.length) ? `
     <div style="background:#fff;border:1px solid rgba(26,20,16,0.08);border-radius:10px;padding:10px 12px;margin:0 0 12px">
-      ${topRisks.length ? `<div style="font-size:12px;color:rgba(26,20,16,0.78);line-height:1.45"><strong>Top watch-outs:</strong> ${topRisks.map(r => escHtml(r.name)).join(', ')}</div>` : ''}
+      ${topRisks.length ? `<div style="font-size:12px;color:rgba(26,20,16,0.78);line-height:1.45"><strong>Top watch-outs:</strong> ${topRisks.map(r => `${escHtml(r.name)} (${escHtml(r.concern)})`).join(', ')}</div>` : ''}
       ${topGood.length ? `<div style="font-size:12px;color:rgba(26,20,16,0.62);line-height:1.45;margin-top:${topRisks.length ? '5px' : '0'}"><strong>Looks good:</strong> ${topGood.map(escHtml).join(', ')}</div>` : ''}
     </div>` : '';
 
