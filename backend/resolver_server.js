@@ -761,6 +761,70 @@ function blockedProductSetForQuery(query, negativeRules = {}) {
   return new Set(ids.map(String));
 }
 
+let _ingredientPhraseLexiconCache = null;
+function buildIngredientPhraseLexicon() {
+  if (_ingredientPhraseLexiconCache) return _ingredientPhraseLexiconCache;
+  const phrases = new Set();
+  const pushPhrase = (value) => {
+    const formatted = formatCanonicalName(value);
+    if (!formatted || formatted.length < 2) return;
+    phrases.add(formatted);
+  };
+  const knowledge = readIngredientKnowledge();
+  Object.keys(knowledge.canonical || {}).forEach(pushPhrase);
+  Object.keys(knowledge.synonyms || {}).forEach(pushPhrase);
+  const canonicalIndex = readCanonicalIngredientIndex();
+  for (const item of (canonicalIndex.items || [])) {
+    pushPhrase(item.canonicalId);
+    pushPhrase(item.inciName);
+    for (const syn of (item.synonyms || [])) pushPhrase(syn);
+  }
+  const byFirstWord = new Map();
+  for (const phrase of phrases) {
+    const words = phrase.split(/\s+/).filter(Boolean);
+    if (!words.length) continue;
+    const first = words[0];
+    const arr = byFirstWord.get(first) || [];
+    arr.push(words);
+    byFirstWord.set(first, arr);
+  }
+  for (const arr of byFirstWord.values()) arr.sort((a, b) => b.length - a.length);
+  _ingredientPhraseLexiconCache = { byFirstWord };
+  return _ingredientPhraseLexiconCache;
+}
+
+function splitUnseparatedIngredientBlock(token) {
+  const normalized = formatCanonicalName(token);
+  if (!normalized) return [];
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length < 12) return [];
+  const { byFirstWord } = buildIngredientPhraseLexicon();
+  const out = [];
+  let i = 0;
+  while (i < words.length) {
+    const candidates = byFirstWord.get(words[i]) || [];
+    let matched = null;
+    for (const phraseWords of candidates) {
+      if (phraseWords.length > 8) continue;
+      if (i + phraseWords.length > words.length) continue;
+      let ok = true;
+      for (let j = 0; j < phraseWords.length; j++) {
+        if (words[i + j] !== phraseWords[j]) { ok = false; break; }
+      }
+      if (ok) { matched = phraseWords; break; }
+    }
+    if (matched) {
+      out.push(matched.join(' '));
+      i += matched.length;
+      continue;
+    }
+    const word = words[i];
+    if (/^[A-Z0-9][A-Z0-9+.-]*$/.test(word) && word.length > 2) out.push(word);
+    i += 1;
+  }
+  return [...new Set(out.filter(Boolean))];
+}
+
 function normalizeIngredientText(raw) {
   if (!raw) return '';
   const scrubbed = String(raw)
@@ -775,11 +839,21 @@ function normalizeIngredientText(raw) {
     .replace(/\s+\/\s+/g, ', ')
     .replace(/\s+/g, ' ')
     .trim();
-  const tokens = scrubbed
+  let tokens = scrubbed
     .split(',')
     .map(t => t.trim())
     .filter(Boolean)
     .map(t => t.replace(/^[-.\s]+|[-.\s]+$/g, ''));
+  // Fallback for labels pasted as one long space-separated block without commas/bullets.
+  if (tokens.length <= 2) {
+    const expanded = [];
+    for (const token of tokens) {
+      const split = splitUnseparatedIngredientBlock(token);
+      if (split.length >= 4) expanded.push(...split);
+      else expanded.push(token);
+    }
+    tokens = expanded.map(t => t.trim()).filter(Boolean);
+  }
   return tokens.join(', ');
 }
 

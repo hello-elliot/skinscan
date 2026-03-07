@@ -551,6 +551,62 @@
       "al": 0,
       "safe": true,
       "func": "skin conditioning"
+    },
+    "T-BUTYL ALCOHOL": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 1,
+      "al": 0,
+      "safe": null,
+      "func": "solvent"
+    },
+    "ESCIN": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "soothing"
+    },
+    "CELLULOSE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "texturizer"
+    },
+    "POLYMNIA SONCHIFOLIA ROOT JUICE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "humectant"
+    },
+    "SALICYLOYL PHYTOSPHINGOSINE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "barrier support"
+    },
+    "MANNOSE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "humectant"
+    },
+    "C13-14 ISOPARAFFIN": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": null,
+      "func": "emollient"
     }
   },
   "synonyms": {
@@ -625,7 +681,9 @@
     "METHYL GLUCETH-10": "METHYL GLUCETH-10",
     "ORYZA SATIVA (RICE) SEED PROTEIN": "ORYZA SATIVA (RICE) SEED PROTEIN",
     "DEFATTED RICE BRAN EXTRACT": "DEFATTED RICE BRAN EXTRACT",
-    "ORYZA SATIVA (RICE) BRAN": "ORYZA SATIVA (RICE) BRAN"
+    "ORYZA SATIVA (RICE) BRAN": "ORYZA SATIVA (RICE) BRAN",
+    "FAEX EXTRACT": "YEAST EXTRACT",
+    "YEAST EXTRACT": "YEAST EXTRACT"
   },
   "family_rules": [
     {

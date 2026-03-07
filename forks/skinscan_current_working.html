@@ -2405,7 +2405,19 @@ function isLikelyIngredientText(text) {
   const lineCount = value.split(/\r?\n/).map(x => x.trim()).filter(Boolean).length;
   const separators = (value.match(/[,;\n•·●]/g) || []).length + (value.match(/\s+\/\s+/g) || []).length;
   const hasInciWords = /(aqua|water|glycerin|parfum|fragrance|acid|extract|alcohol|glycol|sodium|peg-|butylene|tocopherol|niacinamide|copolymer|crosspolymer|dimethicone|dioxide)/i.test(value);
-  return lineCount >= 4 || (separators >= 5 && hasInciWords);
+  if (lineCount >= 4 || (separators >= 5 && hasInciWords)) return true;
+  // Space-only ingredient labels (no commas/bullets), often in all caps.
+  const normalized = value
+    .replace(/\s+\/\s+/g, ' ')
+    .replace(/[()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const words = normalized.split(' ').filter(Boolean);
+  if (words.length >= 18) {
+    const chemicalCueCount = words.filter(w => /(acid|extract|alcohol|glycol|sodium|peg|poly|ferment|crosspolymer|copolymer|dioxide|fragrance|parfum|lysate|isoparaffin|carbomer)/i.test(w)).length;
+    if (chemicalCueCount >= 4 && hasInciWords) return true;
+  }
+  return false;
 }
 function isLikelyProductUrl(text) {
   const value = String(text || '').trim();
