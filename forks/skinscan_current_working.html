@@ -340,6 +340,7 @@
     .chip { padding: 8px 16px; font-size: 13.5px; }
     .skin-quiz-overlay { padding: 8px; }
     .skin-quiz-sheet { border-radius: 12px; }
+    #skinQuizTrigger { margin-left: 0 !important; }
   }
   @media (min-width: 768px) {
     .skin-quiz-overlay { align-items: center; padding: 20px; }
@@ -390,9 +391,9 @@
     <button class="chip" data-type="oily">Oily</button>
     <button class="chip" data-type="combination">Combination</button>
   </div>
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:2px 0 7px 2px">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 7px 2px">
     <div style="font-size:11px;color:rgba(26,20,16,0.42);letter-spacing:.01em">Conditions</div>
-    <button class="skin-quiz-trigger" id="skinQuizTrigger" type="button" style="margin:0">Not sure? Find my skin profile</button>
+    <button class="skin-quiz-trigger" id="skinQuizTrigger" type="button" style="margin:0 0 0 8px">Not sure? Find my skin profile</button>
   </div>
   <div class="skin-chips" id="skinChipsConditions" style="margin-bottom:14px">
     <button class="chip" data-type="acne-prone">Acne-prone</button>
