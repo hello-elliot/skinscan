@@ -817,6 +817,72 @@ function scoreIngredientCandidate(text) {
   return { valid: true, confidence, reason: '' };
 }
 
+const INGREDIENT_SOURCE_WEIGHTS = Object.freeze({
+  'index-cache': 0.26,
+  incidecoder_url: 0.22,
+  incidecoder_slug: 0.2,
+  incidecoder: 0.18,
+  obf: 0.16,
+  retailer: 0.14,
+  brand: 0.14,
+  ai: 0.06,
+  direct_lookup: 0.18
+});
+
+function sourceWeightForIngredientPayload(source) {
+  const key = String(source || '').toLowerCase();
+  return Number(INGREDIENT_SOURCE_WEIGHTS[key] || 0.1);
+}
+
+function rankIngredientPayload(payload, fallbackSource = '') {
+  if (!payload || !payload.ingredientsText) return null;
+  const normalizedIngredients = normalizeIngredientText(payload.ingredientsText);
+  const quality = scoreIngredientCandidate(normalizedIngredients);
+  if (!quality.valid) return null;
+
+  const source = String(payload.source || fallbackSource || '').toLowerCase();
+  const sourceWeight = sourceWeightForIngredientPayload(source);
+  const tokenCount = ingredientTokens(normalizedIngredients).length;
+  const payloadConfidence = Number(payload.confidence || 0);
+  const richness = Math.min(tokenCount / 55, 0.22);
+  const confidenceBlend = Math.min(0.18, payloadConfidence * 0.18);
+  const rank = Number((quality.confidence + sourceWeight + richness + confidenceBlend).toFixed(4));
+
+  return {
+    rank,
+    tokenCount,
+    qualityConfidence: quality.confidence,
+    source,
+    payload: {
+      ...payload,
+      source: source || String(payload.source || fallbackSource || 'direct_lookup'),
+      ingredientsText: normalizedIngredients,
+      confidence: Number(Math.max(payloadConfidence, quality.confidence).toFixed(3))
+    }
+  };
+}
+
+function chooseBestIngredientPayload(candidates) {
+  const ranked = (Array.isArray(candidates) ? candidates : [])
+    .map(candidate => rankIngredientPayload(candidate))
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (b.rank !== a.rank) return b.rank - a.rank;
+      if (b.tokenCount !== a.tokenCount) return b.tokenCount - a.tokenCount;
+      return b.qualityConfidence - a.qualityConfidence;
+    });
+  if (!ranked.length) return null;
+  return {
+    best: ranked[0].payload,
+    debug: ranked.map(r => ({
+      source: r.source,
+      rank: r.rank,
+      tokenCount: r.tokenCount,
+      confidence: r.payload.confidence
+    }))
+  };
+}
+
 function productHasIngredients(product) {
   if (!product || product.ingredients_status !== 'available') return false;
   const quality = scoreIngredientCandidate(String(product.ingredients_text || ''));
@@ -1924,15 +1990,18 @@ async function fetchImmediateIngredientsByQuery(query, budgetMs = 4200) {
   const q = String(query || '').trim();
   if (!q) return null;
   const started = Date.now();
-  const left = () => Math.max(250, budgetMs - (Date.now() - started));
+  const left = () => Math.max(220, budgetMs - (Date.now() - started));
+  const candidates = [];
+  const take = hit => { if (hit?.ingredientsText) candidates.push(hit); };
 
-  const inci = await fetchIngredientsFromIncidecoderSearch(q, Math.min(2800, left())).catch(() => null);
-  if (inci?.ingredientsText) return inci;
+  const inciBudget = Math.min(2400, left());
+  take(await fetchIngredientsFromIncidecoderSearch(q, inciBudget).catch(() => null));
 
-  const obf = await fetchIngredientsFromOBF(q, Math.min(2200, left())).catch(() => null);
-  if (obf?.ingredientsText) return obf;
+  const obfBudget = Math.min(1800, left());
+  take(await fetchIngredientsFromOBF(q, obfBudget).catch(() => null));
 
-  return null;
+  const chosen = chooseBestIngredientPayload(candidates);
+  return chosen?.best || null;
 }
 
 function buildIngredientLookupQueries(product, query) {
@@ -1953,36 +2022,59 @@ async function fetchImmediateIngredientsForProduct(product, query, budgetMs = 52
   if (!product) return null;
   const started = Date.now();
   const left = () => Math.max(300, budgetMs - (Date.now() - started));
+  const candidates = [];
+  const take = hit => { if (hit?.ingredientsText) candidates.push(hit); };
 
-  const inciGuess = await fetchIngredientsFromIncidecoderSlugGuesses(product, query || `${product.brand_canonical} ${product.name_canonical}`, Math.min(2400, left())).catch(() => null);
-  if (inciGuess?.ingredientsText) return inciGuess;
+  take(await fetchIngredientsFromIncidecoderSlugGuesses(
+    product,
+    query || `${product.brand_canonical} ${product.name_canonical}`,
+    Math.min(2200, left())
+  ).catch(() => null));
 
   const sourceUrls = Array.isArray(product.source_urls) ? product.source_urls.filter(Boolean) : [];
   if (sourceUrls.length) {
     const incidecoderUrls = sourceUrls.filter(u => String(u).toLowerCase().includes('incidecoder.com'));
     if (incidecoderUrls.length) {
-      const inciHit = await fetchIngredientsFromProfileUrls(product.product_id, 'brand', incidecoderUrls, Math.min(2600, left())).catch(() => null);
-      if (inciHit?.ingredientsText) return inciHit;
+      take(await fetchIngredientsFromProfileUrls(
+        product.product_id,
+        'brand',
+        incidecoderUrls,
+        Math.min(2200, left())
+      ).catch(() => null));
     }
     const retailerUrls = sourceUrls.filter(u => classifyUrlKind(u) === 'retailer');
     if (retailerUrls.length) {
-      const rHit = await fetchIngredientsFromProfileUrls(product.product_id, 'retailer', retailerUrls, Math.min(2200, left())).catch(() => null);
-      if (rHit?.ingredientsText) return rHit;
+      take(await fetchIngredientsFromProfileUrls(
+        product.product_id,
+        'retailer',
+        retailerUrls,
+        Math.min(1800, left())
+      ).catch(() => null));
     }
     const brandUrls = sourceUrls.filter(u => classifyUrlKind(u) === 'brand');
     if (brandUrls.length) {
-      const bHit = await fetchIngredientsFromProfileUrls(product.product_id, 'brand', brandUrls, Math.min(2200, left())).catch(() => null);
-      if (bHit?.ingredientsText) return bHit;
+      take(await fetchIngredientsFromProfileUrls(
+        product.product_id,
+        'brand',
+        brandUrls,
+        Math.min(1800, left())
+      ).catch(() => null));
     }
   }
 
   const queries = buildIngredientLookupQueries(product, query);
   for (const q of queries) {
-    const hit = await fetchImmediateIngredientsByQuery(q, Math.min(2200, left())).catch(() => null);
-    if (hit?.ingredientsText) return hit;
+    take(await fetchImmediateIngredientsByQuery(q, Math.min(2000, left())).catch(() => null));
+    const chosen = chooseBestIngredientPayload(candidates);
+    if (chosen?.best) {
+      const bestTokens = ingredientTokens(chosen.best.ingredientsText).length;
+      const bestConfidence = Number(chosen.best.confidence || 0);
+      if (bestTokens >= 24 && bestConfidence >= 0.86) return chosen.best;
+    }
     if (left() <= 350) break;
   }
-  return null;
+  const chosen = chooseBestIngredientPayload(candidates);
+  return chosen?.best || null;
 }
 
 function extractJsonLdIngredients(text) {
@@ -3053,6 +3145,7 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
     }
     const adapters = buildAdapters(product, query, discoveredUrls);
     let finalFailureStage = 'no_ingredient_block_found';
+    const adapterCandidates = [];
 
     for (const adapter of adapters) {
       appendJobAdapterTrace(productId, { stage: 'adapter_start', adapter: adapter.name });
@@ -3070,23 +3163,33 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
         appendJobAdapterTrace(productId, { stage: 'adapter_fail', adapter: adapter.name, failureStage: finalFailureStage });
         continue;
       }
+      adapterCandidates.push({
+        source: String(attempt.result.source || adapter.name),
+        sourceUrl: attempt.result.sourceUrl || '',
+        ingredientsText: normalizedIngredients,
+        confidence: Number(attempt.result.confidence || quality.confidence || 0),
+        imageUrl: attempt.result.imageUrl || '',
+        category: attempt.result.category || ''
+      });
+      const candidateRank = rankIngredientPayload(adapterCandidates[adapterCandidates.length - 1], adapter.name);
+      appendJobAdapterTrace(productId, {
+        stage: 'adapter_candidate',
+        adapter: adapter.name,
+        source: attempt.result.source || adapter.name,
+        rank: Number(candidateRank?.rank || 0),
+        tokenCount: candidateRank?.tokenCount || 0
+      });
 
-      product.ingredients_text = normalizedIngredients;
-      product.ingredients_status = 'available';
-      product.ingredients_source = attempt.result.source;
-      product.ingredients_last_verified_at = nowIso();
-      product.ingredients_version_hash = hashText(normalizedIngredients);
-      product.ingredients_confidence = attempt.result.confidence || quality.confidence;
-      if (attempt.result.imageUrl && !product.image_url) product.image_url = attempt.result.imageUrl;
-      if (attempt.result.category && !product.category) product.category = attempt.result.category;
-      product.confidence_metadata = {
-        ...(product.confidence_metadata || {}),
-        freshness: 'daily',
-        updated_at: nowIso()
-      };
-      writeIndex(index);
-      upsertCatalogProducts([product]);
+      if (candidateRank && candidateRank.tokenCount >= 24 && candidateRank.qualityConfidence >= 0.9) {
+        break;
+      }
+    }
 
+    const chosen = chooseBestIngredientPayload(adapterCandidates);
+    if (chosen?.best && persistResolvedProductIngredients(productId, chosen.best)) {
+      const refreshed = readIndex();
+      const updatedProduct = refreshed.products.find(x => x.product_id === productId);
+      const normalizedIngredients = normalizeIngredientText(updatedProduct?.ingredients_text || chosen.best.ingredientsText || '');
       const knowledge = readIngredientKnowledge();
       const canonicalIndex = readCanonicalIngredientIndex();
       const canonicalLookup = buildCanonicalSynonymLookup(canonicalIndex);
@@ -3099,10 +3202,15 @@ async function runIngredientResolutionJob(productId, query, locale, region, opti
       });
 
       withJobState(productId, { state: 'available', done: true, lastError: '' });
-      appendJobAdapterTrace(productId, { stage: 'adapter_success', adapter: adapter.name, source: attempt.result.source });
+      appendJobAdapterTrace(productId, { stage: 'adapter_success', adapter: chosen.best.source || 'multi', source: chosen.best.source || 'multi' });
+      appendJobAdapterTrace(productId, {
+        stage: 'adapter_choice',
+        selectedSource: chosen.best.source || 'multi',
+        comparedSources: chosen.debug
+      });
       pushMetric('ingredient_resolve_succeeded', {
         productId,
-        source: attempt.result.source,
+        source: chosen.best.source || 'multi',
         duration_ms: Date.now() - startedAt,
         mode: options.syncMode ? 'sync' : 'async',
         matchTypeCount
