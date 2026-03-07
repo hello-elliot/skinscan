@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-BASE_URL="${1:-${RESOLVER_BASE_URL:-https://skinscan-3bgp.onrender.com}}"
+BASE_URL="${1:-${RESOLVER_BASE_URL:-https://skinscan-resolver-api.onrender.com}}"
 
 node - "$BASE_URL" <<'NODE'
 const base = (process.argv[2] || '').replace(/\/+$/, '');

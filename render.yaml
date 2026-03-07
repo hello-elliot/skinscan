@@ -31,3 +31,5 @@ services:
     envVars:
       - key: RESOLVER_API_URL
         sync: false
+      - key: RESOLVER_API_FALLBACKS
+        sync: false

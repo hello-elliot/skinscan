@@ -17,7 +17,12 @@ mkdir -p "$OUT_DIR"
 
 RESOLVER_URL="${RESOLVER_API_URL:-}"
 if [ -z "$RESOLVER_URL" ]; then
-  RESOLVER_URL="https://skinscan-3bgp.onrender.com"
+  RESOLVER_URL="https://skinscan-resolver-api.onrender.com"
+fi
+
+RESOLVER_FALLBACKS="${RESOLVER_API_FALLBACKS:-}"
+if [ -z "$RESOLVER_FALLBACKS" ]; then
+  RESOLVER_FALLBACKS="$RESOLVER_URL"
 fi
 
 PROXY_URL="${SKINSCAN_PROXY_URL:-}"
@@ -25,7 +30,7 @@ if [ -z "$PROXY_URL" ]; then
   PROXY_URL="${RESOLVER_URL%/}/resolver/ai-proxy"
 fi
 
-INJECT_SCRIPT="<script>window.__SKINSCAN_RESOLVER_API_URL='${RESOLVER_URL}';window.__SKINSCAN_PROXY_URL='${PROXY_URL}';</script>"
+INJECT_SCRIPT="<script>window.__SKINSCAN_RESOLVER_API_URL='${RESOLVER_URL}';window.__SKINSCAN_PROXY_URL='${PROXY_URL}';window.__SKINSCAN_RESOLVER_API_FALLBACKS='${RESOLVER_FALLBACKS}'.split(',').map(function(v){return v.trim();}).filter(Boolean);</script>"
 OVERRIDES_JSON="$(node - "$OVERRIDES_PATH" "$CANONICAL_INDEX_PATH" <<'NODE'
 const fs = require('fs');
 const overridesPath = process.argv[2];

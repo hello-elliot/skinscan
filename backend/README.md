@@ -313,7 +313,7 @@ Returns resolver contract smoke-check status for key canary queries.
 ## Smoke Script
 
 ```bash
-bash scripts/smoke_resolver_contract.sh https://skinscan-3bgp.onrender.com
+bash scripts/smoke_resolver_contract.sh https://skinscan-resolver-api.onrender.com
 ```
 
 Checks live deploy contract shape:
