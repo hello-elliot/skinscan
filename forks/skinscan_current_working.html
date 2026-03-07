@@ -3186,6 +3186,8 @@ function acneSafetyScore(flagged, options = {}) {
   else if (burden < 0.8) score = 4;
   else if (burden < 1.5) score = 3;
   else if (burden < 2.2) score = 2;
+  // Any detected comedogenic signal should not be displayed as "No risk".
+  if (moderateOrHigher >= 1) score = Math.min(score, 4);
   // Acne-prone guardrails: do not show a perfect score with meaningful comedogenic signal.
   if (isAcneProne) {
     if (moderateOrHigher >= 2) score = Math.min(score, 4);
