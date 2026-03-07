@@ -3158,10 +3158,10 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
 
   // Category rows — bar + plain-text flagged list
   const scoreLabel = (s) => {
-    if (s >= 5) return '<span style="font-size:10px;font-weight:400;opacity:0.55;margin-left:5px">No risk</span>';
-    if (s === 4) return '<span style="font-size:10px;font-weight:400;opacity:0.55;margin-left:5px">Low risk</span>';
-    if (s === 3) return '<span style="font-size:10px;font-weight:400;opacity:0.55;margin-left:5px">Moderate</span>';
-    if (s === 2) return '<span style="font-size:10px;font-weight:700;margin-left:5px;color:var(--bad)">High risk</span>';
+    if (s >= 4.8) return '<span style="font-size:10px;font-weight:400;opacity:0.55;margin-left:5px">No risk</span>';
+    if (s >= 4.1) return '<span style="font-size:10px;font-weight:400;opacity:0.55;margin-left:5px">Low risk</span>';
+    if (s >= 3.5) return '<span style="font-size:10px;font-weight:400;opacity:0.55;margin-left:5px">Moderate</span>';
+    if (s >= 2.5) return '<span style="font-size:10px;font-weight:700;margin-left:5px;color:var(--bad)">High risk</span>';
     return '<span style="font-size:10px;font-weight:700;margin-left:5px;color:var(--bad)">Very high risk</span>';
   };
 
@@ -3171,8 +3171,8 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
 
     // Color class
     const cls = isAllergen ? 'c-allergen'
-               : c.score >= 4 ? 'c-safe'
-               : c.score === 3 ? 'c-caution'
+               : c.score >= 4.1 ? 'c-safe'
+               : c.score >= 3.5 ? 'c-caution'
                : 'c-risk';
 
     // Bar: for non-allergens, bar = risk level (wider = more risk)
