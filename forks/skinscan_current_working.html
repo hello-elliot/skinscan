@@ -911,7 +911,11 @@ function dbLookup(name) {
 // Replace YOUR_WORKER_URL with your Cloudflare Worker URL after deploying.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const PROXY_URL = 'https://skinscan-proxy.kelly-f.workers.dev';
-const RESOLVER_API_URL = window.__SKINSCAN_RESOLVER_API_URL || 'https://skinscan-resolver-api.onrender.com';
+const RESOLVER_API_URL = window.__SKINSCAN_RESOLVER_API_URL || 'https://skinscan-3bgp.onrender.com';
+const RESOLVER_API_FALLBACKS = [
+  'https://skinscan-3bgp.onrender.com',
+  'https://skinscan-1.onrender.com'
+];
 
 // All Anthropic API calls go through the proxy — no key in the client
 function apiUrl()     { return PROXY_URL + '/v1/messages'; }
@@ -922,7 +926,13 @@ function authHeaders() {
     'anthropic-beta':    'web-search-2025-03-05',
   };
 }
-function resolverUrl(path) { return RESOLVER_API_URL.replace(/\/+$/, '') + path; }
+function resolverUrl(path, baseUrl = RESOLVER_API_URL) { return String(baseUrl || '').replace(/\/+$/, '') + path; }
+function resolverBaseUrls() {
+  const candidates = [window.__SKINSCAN_RESOLVER_API_URL, RESOLVER_API_URL, ...RESOLVER_API_FALLBACKS]
+    .filter(Boolean)
+    .map(v => String(v).replace(/\/+$/, ''));
+  return [...new Set(candidates)];
+}
 
 // ── Search results cache: avoids redundant API calls for repeated queries ──
 // Keyed by normalised query string. Entries never expire (session-scoped).
@@ -2158,44 +2168,55 @@ async function resolveProductLocal(query, options = {}) {
   return { ...classified, normalizedQuery: correctedQuery, appliedFuzzyCorrection: usedFuzzy };
 }
 async function resolveProductFromBackend(query, options = {}) {
-  try {
-    const locale = (navigator.language || 'en-US');
-    const region = (locale.split('-')[1] || '').toUpperCase();
-    const endpoint = options.fast ? '/resolver/products/fast' : '/resolver/products';
-    const timeoutMs = Number(options.timeoutMs || (options.fast ? 1800 : 12000));
-    const controller = options.abortController || new AbortController();
+  const locale = (navigator.language || 'en-US');
+  const region = (locale.split('-')[1] || '').toUpperCase();
+  const endpoint = options.fast ? '/resolver/products/fast' : '/resolver/products';
+  const timeoutMs = Number(options.timeoutMs || (options.fast ? 1800 : 12000));
+  const externalSignal = options.abortController?.signal || null;
+  const bases = resolverBaseUrls();
+
+  for (const baseUrl of bases) {
+    if (externalSignal?.aborted) return null;
+    const controller = new AbortController();
+    let abortedByExternal = false;
+    const onExternalAbort = () => {
+      abortedByExternal = true;
+      try { controller.abort(); } catch (_) {}
+    };
+    if (externalSignal) externalSignal.addEventListener('abort', onExternalAbort, { once: true });
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let res;
     try {
-      res = await fetch(resolverUrl(endpoint), {
+      const res = await fetch(resolverUrl(endpoint, baseUrl), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, locale, region }),
         signal: controller.signal
       });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (!data || !data.state) continue;
+      const mapped = {
+        state: data.state,
+        normalizedQuery: data.normalized_query || normalizeQuery(query),
+        appliedFuzzyCorrection: Array.isArray(data.applied_corrections) && data.applied_corrections.length > 0,
+        decisionReason: data.decisionReason || '',
+        autoResolved: !!data.autoResolved,
+        ingredientResolutionState: data.ingredientResolutionState || '',
+        ingredientJobId: data.ingredientJobId || '',
+        ingredientFailureStage: data.ingredientFailureStage || '',
+        latencyMs: Number(data.latencyMs || 0)
+      };
+      if (data.product) mapped.product = mapBackendProduct(data.product);
+      if (Array.isArray(data.candidates)) mapped.candidates = data.candidates.map(mapBackendProduct).filter(Boolean);
+      return mapped;
+    } catch (_) {
+      if (abortedByExternal) return null;
     } finally {
       clearTimeout(timer);
+      if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort);
     }
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data || !data.state) return null;
-    const mapped = {
-      state: data.state,
-      normalizedQuery: data.normalized_query || normalizeQuery(query),
-      appliedFuzzyCorrection: Array.isArray(data.applied_corrections) && data.applied_corrections.length > 0,
-      decisionReason: data.decisionReason || '',
-      autoResolved: !!data.autoResolved,
-      ingredientResolutionState: data.ingredientResolutionState || '',
-      ingredientJobId: data.ingredientJobId || '',
-      ingredientFailureStage: data.ingredientFailureStage || '',
-      latencyMs: Number(data.latencyMs || 0)
-    };
-    if (data.product) mapped.product = mapBackendProduct(data.product);
-    if (Array.isArray(data.candidates)) mapped.candidates = data.candidates.map(mapBackendProduct).filter(Boolean);
-    return mapped;
-  } catch (_) {
-    return null;
   }
+  return null;
 }
 
 async function resolveProduct(query, options = {}) {
