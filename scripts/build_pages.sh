@@ -22,7 +22,7 @@ fi
 
 RESOLVER_FALLBACKS="${RESOLVER_API_FALLBACKS:-}"
 if [ -z "$RESOLVER_FALLBACKS" ]; then
-  RESOLVER_FALLBACKS="$RESOLVER_URL"
+  RESOLVER_FALLBACKS="${RESOLVER_URL},https://skinscan-resolver-api.onrender.com,https://skinscan-3bgp.onrender.com"
 fi
 
 PROXY_URL="${SKINSCAN_PROXY_URL:-}"

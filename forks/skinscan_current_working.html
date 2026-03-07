@@ -934,6 +934,7 @@ const PROXY_URL = window.__SKINSCAN_PROXY_URL || (String(RESOLVER_API_URL).repla
 const RESOLVER_API_FALLBACKS = Array.isArray(window.__SKINSCAN_RESOLVER_API_FALLBACKS)
   ? window.__SKINSCAN_RESOLVER_API_FALLBACKS
   : [];
+const DEFAULT_RESOLVER_FALLBACKS = ['https://skinscan-resolver-api.onrender.com', 'https://skinscan-3bgp.onrender.com'];
 
 // All Anthropic API calls go through the proxy — no key in the client
 function apiUrl()     { return PROXY_URL + '/v1/messages'; }
@@ -946,7 +947,12 @@ function authHeaders() {
 }
 function resolverUrl(path, baseUrl = RESOLVER_API_URL) { return String(baseUrl || '').replace(/\/+$/, '') + path; }
 function resolverBaseUrls() {
-  const candidates = [window.__SKINSCAN_RESOLVER_API_URL, RESOLVER_API_URL, ...RESOLVER_API_FALLBACKS]
+  const candidates = [
+    window.__SKINSCAN_RESOLVER_API_URL,
+    RESOLVER_API_URL,
+    ...RESOLVER_API_FALLBACKS,
+    ...DEFAULT_RESOLVER_FALLBACKS
+  ]
     .filter(Boolean)
     .map(v => String(v).replace(/\/+$/, ''));
   return [...new Set(candidates)];
@@ -1784,7 +1790,7 @@ async function resolveProductFromBackend(query, options = {}) {
   const locale = (navigator.language || 'en-US');
   const region = (locale.split('-')[1] || '').toUpperCase();
   const endpoint = options.fast ? '/resolver/products/fast' : '/resolver/products';
-  const timeoutMs = Number(options.timeoutMs || (options.fast ? 1500 : 5000));
+  const timeoutMs = Number(options.timeoutMs || (options.fast ? 2200 : 5000));
   const externalSignal = options.abortController?.signal || null;
   const bases = resolverBaseUrls();
 
@@ -1833,11 +1839,18 @@ async function resolveProductFromBackend(query, options = {}) {
 }
 
 async function resolveProduct(query, options = {}) {
-  const backend = await resolveProductFromBackend(query, {
+  let backend = await resolveProductFromBackend(query, {
     fast: !!options.forSuggest,
     timeoutMs: options.forSuggest ? 1800 : 12000,
     abortController: options.abortController || null
   });
+  if ((!backend || backend.state === 'error') && options.forSuggest) {
+    backend = await resolveProductFromBackend(query, {
+      fast: false,
+      timeoutMs: 3200,
+      abortController: options.abortController || null
+    });
+  }
   if (backend && backend.state && backend.state !== 'error') return backend;
   if (options.forSuggest) {
     return {
@@ -2828,34 +2841,62 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
     await new Promise(r => setTimeout(r, 80));
 
     const analysis = await analyzeIngredientsWithBackend(ingredientsText, skinProfile);
-    if (!analysis) {
-      throw new Error('analysis_unavailable');
-    }
-
-    const ingredients = parseIngredients(analysis.ingredientsTextNormalized || ingredientsText);
+    const ingredients = parseIngredients((analysis && analysis.ingredientsTextNormalized) ? analysis.ingredientsTextNormalized : ingredientsText);
     if (!ingredients.length) { showNotFound(productName); return; }
 
     const skinTypes = profileToSkinTypes(skinProfile);
     const profileMode = profileModeFromProfile(skinProfile);
-    const cats = (analysis.categories || []).map(mapBackendCategoryToUi);
-    const unknownIngredients = Array.isArray(analysis.unknownIngredients) ? analysis.unknownIngredients : [];
-    const overall = Number(analysis.overall || 5);
-    const verdict = String(analysis.verdict || verdictFromScore(overall));
-    const confLabelRaw = String(analysis?.confidence?.label || 'high');
-    const confLabel = confLabelRaw.charAt(0).toUpperCase() + confLabelRaw.slice(1).toLowerCase();
-    const confPct = Number(analysis?.confidence?.pct || 1);
-    const aiFlags = {
-      acne: (cats.find(c => c.key === 'acne')?.flagged || []),
-      sensitive: (cats.find(c => c.key === 'reactive')?.flagged || []),
-      dry: (cats.find(c => c.key === 'dry')?.flagged || []),
-      allergens: (cats.find(c => c.key === 'allergen')?.flagged || []),
-      _unknown: unknownIngredients,
-      _matchTypeCounts: analysis.matchTypeCount || {}
-    };
+    let cats = [];
+    let unknownIngredients = [];
+    let overall = 5;
+    let verdict = 'safe';
+    let confLabel = 'High';
+    let confPct = 1;
+    let aiFlags = {};
+
+    if (analysis) {
+      cats = (analysis.categories || []).map(mapBackendCategoryToUi);
+      unknownIngredients = Array.isArray(analysis.unknownIngredients) ? analysis.unknownIngredients : [];
+      overall = Number(analysis.overall || 5);
+      verdict = String(analysis.verdict || verdictFromScore(overall));
+      const confLabelRaw = String(analysis?.confidence?.label || 'high');
+      confLabel = confLabelRaw.charAt(0).toUpperCase() + confLabelRaw.slice(1).toLowerCase();
+      confPct = Number(analysis?.confidence?.pct || 1);
+      aiFlags = {
+        acne: (cats.find(c => c.key === 'acne')?.flagged || []),
+        sensitive: (cats.find(c => c.key === 'reactive')?.flagged || []),
+        dry: (cats.find(c => c.key === 'dry')?.flagged || []),
+        allergens: (cats.find(c => c.key === 'allergen')?.flagged || []),
+        _unknown: unknownIngredients,
+        _matchTypeCounts: analysis.matchTypeCount || {}
+      };
+    } else {
+      aiFlags = claudeIngredientCheck(ingredients, skinTypes);
+      unknownIngredients = (aiFlags._unknown || []).filter(u => {
+        if (!u) return false;
+        if (/(read all the geeky details|learn more|click here|ingredients explained|here\s*>>?)/i.test(String(u))) return false;
+        const resolved = resolveIngredient(u);
+        return !resolved?.data;
+      });
+      cats = buildCats(skinTypes, profileMode, aiFlags, skinProfile);
+      const unknownCount = unknownIngredients.length;
+      overall = cats.length ? overallScore(cats, unknownCount, ingredients.length) : 5;
+      const acneCat = cats.find(c => c.key === 'acne');
+      const acneProneProfile = (skinProfile.conditions || []).includes('acne-prone');
+      if (acneProneProfile && acneCat && acneCat.flagged.length > 0 && overall >= 5) overall = 4.9;
+      if (acneProneProfile && unknownCount > 0) {
+        const unknownPenalty = Math.min(0.2, unknownCount * 0.05);
+        overall = Math.max(1, Number((overall - unknownPenalty).toFixed(1)));
+      }
+      verdict = verdictFromScore(overall);
+      const localConfidence = coverageConfidence(ingredients.length, unknownCount);
+      confLabel = localConfidence.label;
+      confPct = localConfidence.pct;
+    }
 
     lastAnalysisData = { productName, brand, ingredientsText, source, resultImage, resultCategory };
     logUnknownIngredients(unknownIngredients, source);
-    trackEvent('ingredient_match_type_count', analysis.matchTypeCount || {});
+    trackEvent('ingredient_match_type_count', (analysis && analysis.matchTypeCount) ? analysis.matchTypeCount : (aiFlags._matchTypeCounts || {}));
     renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes, profileMode, dataSource: 'db', unknownIngredients, aiFlags, confLabel, confPct, resultImage, resultCategory, skinProfile });
     if (!hasSeenOnboarding()) {
       markOnboardingSeen();
