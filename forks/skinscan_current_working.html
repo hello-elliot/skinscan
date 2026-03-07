@@ -382,6 +382,8 @@ Object.assign(INGREDIENT_DB, {
   'PHYTOSTERYL OLEATE': { acne: 3, irr: 0, dry: 0, al: 0, safe: true, func: 'emollient' },
   // Recent unknowns mapped
   'BETULA ALBA JUICE': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'humectant/soothing' },
+  'BETULA PLATYPHYLLA JAPONICA JUICE': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'humectant/soothing' },
+  'AMMONIUM ACRYLOYLDIMETHYLTAURATE/VP COPOLYMER': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'thickener/film former' },
   'PENTAERYTHRITYL TETRAETHYLHEXANOATE': { acne: 2, irr: 0, dry: 0, al: 0, safe: true, func: 'emollient' },
   'METHYL GLUCETH-20': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'humectant' },
   'TRIPEPTIDE-32': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'peptide' },
@@ -399,8 +401,11 @@ const INCI_ALIASES = {
   // Water variants
   'AQUA': 'WATER',
   'GLYCERINE': 'GLYCERIN',
+  'BETULA PLATYPHYLLA JAPONICA JUICE': 'BETULA PLATYPHYLLA JAPONICA JUICE',
   'BETULA ALBA JUICE (10000 PPM)': 'BETULA ALBA JUICE',
   'BETULA ALBA JUICE': 'BETULA ALBA JUICE',
+  'AMMONIUM ACRYLOYLDIMETHYL TAURATE/VP COPOLYMER': 'AMMONIUM ACRYLOYLDIMETHYLTAURATE/VP COPOLYMER',
+  'ALOE BARBADENSIS': 'ALOE BARBADENSIS LEAF JUICE',
   'AQUA/WATER': 'WATER',
   'WATER/AQUA': 'WATER',
   'EAU': 'WATER',
@@ -2751,7 +2756,18 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
     });
     const cats = buildCats(skinTypes, profileMode, aiFlags, skinProfile);
     const unknownCount = unknownIngredients.length;
-    const overall = cats.length ? overallScore(cats, unknownCount, ingredients.length) : 5;
+    let overall = cats.length ? overallScore(cats, unknownCount, ingredients.length) : 5;
+    // Acne-prone guardrail: any flagged acne-risk ingredient prevents a perfect score.
+    const acneCat = cats.find(c => c.key === 'acne');
+    const acneProneProfile = (skinProfile.conditions || []).includes('acne-prone');
+    if (acneProneProfile && acneCat && acneCat.flagged.length > 0 && overall >= 5) {
+      overall = 4.9;
+    }
+    // Unknowns reduce confidence first; apply only a tiny score nudge for acne-prone users.
+    if (acneProneProfile && unknownCount > 0) {
+      const unknownPenalty = Math.min(0.2, unknownCount * 0.05);
+      overall = Math.max(1, Number((overall - unknownPenalty).toFixed(1)));
+    }
     const verdict = verdictFromScore(overall);
 
     lastAnalysisData = { productName, brand, ingredientsText, source, resultImage, resultCategory };
