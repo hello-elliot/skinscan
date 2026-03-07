@@ -2702,6 +2702,8 @@ function parseIngredients(text) {
     .replace(/\r/g, '\n')
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[•·●]/g, ',')
+    .replace(/\s+\/\s+/g, ', ')
     // Remove "INGREDIENTS:" label if present at start
     .replace(/^[\s\S]*?INGREDIENTS?\s*[:：\-]\s*/i, '');
 

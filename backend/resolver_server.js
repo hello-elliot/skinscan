@@ -770,7 +770,9 @@ function normalizeIngredientText(raw) {
     .replace(/<[^>]+>/g, ' ')
     .replace(/ingredients?\s*[:\-]/ig, ' ')
     .replace(/\(and\)/ig, ',')
-    .replace(/[\n;|]/g, ',')
+    .replace(/[\n;|•·●]/g, ',')
+    // Split slash-delimited aliases like "AQUA / WATER" but keep chemical names like "DIMETHICONE/VINYL ...".
+    .replace(/\s+\/\s+/g, ', ')
     .replace(/\s+/g, ' ')
     .trim();
   const tokens = scrubbed
@@ -3774,7 +3776,14 @@ function genericSafetyFromFlags(flags = []) {
 }
 
 function acneSafetyFromFlags(flags = [], acneProne = false) {
-  const signalFlags = (flags || []).filter(f => Number(f?.acneVal || 0) >= 2);
+  const signalFlags = (flags || [])
+    .filter(f => Number(f?.acneVal || 0) >= 2)
+    // Prevent duplicated labels/synonyms of the same canonical ingredient from over-penalizing.
+    .filter((f, idx, arr) => {
+      const key = String(f?.canonicalId || f?.name || '').trim().toLowerCase();
+      if (!key) return idx === 0;
+      return arr.findIndex(x => String(x?.canonicalId || x?.name || '').trim().toLowerCase() === key) === idx;
+    });
   const moderateFlags = signalFlags.filter(f => {
     const a = Number(f?.acneVal || 0);
     return a === 2 || a === 3;
@@ -3876,6 +3885,7 @@ function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
     if (acne >= 2) {
       flagged.acne.push({
         name: token,
+        canonicalId: resolved.canonicalId || '',
         severity: toSeverity(acne, 4),
         acneVal: acne,
         positionWeight,
