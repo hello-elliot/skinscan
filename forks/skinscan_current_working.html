@@ -458,14 +458,6 @@
             <circle cx="8" cy="8.5" r="2.5" stroke="#C4622D" stroke-width="1.3"/>
           </svg>
         </button>
-        <!-- Mic: voice dictation -->
-        <button class="icon-btn" id="micBtn" title="Dictate product name">
-          <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-            <rect x="4.5" y="0.75" width="6" height="8" rx="3" stroke="#C4622D" stroke-width="1.3"/>
-            <path d="M2.5 7C2.5 9.761 4.739 12 7.5 12C10.261 12 12.5 9.761 12.5 7" stroke="#C4622D" stroke-width="1.3" stroke-linecap="round"/>
-            <line x1="7.5" y1="12" x2="7.5" y2="14.5" stroke="#C4622D" stroke-width="1.3" stroke-linecap="round"/>
-          </svg>
-        </button>
       </div>
     </div>
     <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none" onchange="handlePhotoUpload(event)">
@@ -479,7 +471,7 @@
 
     <div class="suggestions" id="suggestions"></div>
     <div class="add-product-panel" id="addProductPanel"></div>
-    <p class="hint" id="searchHint">Photograph a label · Dictate · Paste ingredients</p>
+    <p class="hint" id="searchHint">Photograph a label · Paste ingredients · Paste product URL</p>
 
     <button class="analyze-btn" onclick="doScan()">Scan for my skin →</button>
     <div style="margin-top:14px;text-align:center">
@@ -1368,99 +1360,6 @@ document.addEventListener('keydown', (e) => {
 
 // Unified source mode: internal resolver decides source order and fallback.
 function setSource() {}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// VOICE
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const micBtn = document.getElementById('micBtn');
-let recognition = null, isRecording = false;
-
-if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-  // ── iOS Safari notes ──────────────────────────────────────────────
-  // • interimResults:true causes iOS to never fire isFinal=true — keep false
-  // • iOS auto-stops after ~6s silence; onend fires before onresult sometimes
-  // • We track the best transcript ourselves and commit it in onend
-  // ─────────────────────────────────────────────────────────────────
-  let pendingTranscript = '';   // best transcript seen so far this session
-
-  function buildRecognition() {
-    const r = new SR();
-    r.continuous      = false;
-    r.interimResults  = false;  // iOS: true breaks final delivery
-    r.lang            = 'en-US';
-    r.maxAlternatives = 1;
-
-    r.onstart = () => {
-      pendingTranscript = '';
-      productInput.placeholder = 'Listening…';
-    };
-
-    r.onresult = e => {
-      // Collect ALL results (not just from resultIndex) so nothing is missed
-      let transcript = '';
-      for (let i = 0; i < e.results.length; i++) {
-        transcript += e.results[i][0].transcript;
-      }
-      pendingTranscript = transcript.trim();
-      productInput.value = pendingTranscript;
-    };
-
-    r.onspeechend = () => {
-      // Speech finished — stop cleanly (iOS sometimes needs this nudge)
-      try { r.stop(); } catch (_) {}
-    };
-
-    r.onend = () => {
-      isRecording = false;
-      micBtn.classList.remove('recording');
-      productInput.placeholder = 'Type a product name, or paste the ingredient list…';
-
-      // Commit whatever transcript we have (covers iOS where onresult fires late or not at all)
-      if (pendingTranscript) {
-        productInput.value = pendingTranscript;
-        triggerSuggest(pendingTranscript);
-      }
-      // Rebuild for next use (iOS reuses of the same instance are unreliable)
-      recognition = buildRecognition();
-    };
-
-    r.onerror = e => {
-      isRecording = false;
-      micBtn.classList.remove('recording');
-      productInput.placeholder = 'Type a product name, or paste the ingredient list…';
-      if (e.error !== 'no-speech' && e.error !== 'aborted') {
-        console.warn('Speech recognition error:', e.error);
-      }
-      recognition = buildRecognition();
-    };
-
-    return r;
-  }
-
-  recognition = buildRecognition();
-
-  micBtn.addEventListener('click', () => {
-    if (isRecording) {
-      try { recognition.stop(); } catch (_) {}
-    } else {
-      isRecording = true;
-      micBtn.classList.add('recording');
-      try { recognition.start(); }
-      catch (err) {
-        // Already started or not allowed — reset
-        isRecording = false;
-        micBtn.classList.remove('recording');
-        recognition = buildRecognition();
-      }
-    }
-  });
-
-} else {
-  micBtn.style.opacity = '0.3';
-  micBtn.title = 'Speech recognition not supported on this browser';
-}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // PHOTO / CAMERA MODE
@@ -2811,6 +2710,73 @@ function isPastedIngredientList(text) {
   const avgLen = tokens.reduce((s, t) => s + t.length, 0) / tokens.length;
   return avgLen < 32;  // INCI names average ~12 chars; product names much longer
 }
+function isLikelyIngredientText(text) {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  if (isPastedIngredientList(value)) return true;
+  const lineCount = value.split(/\r?\n/).map(x => x.trim()).filter(Boolean).length;
+  const separators = (value.match(/[,;\n]/g) || []).length;
+  const hasInciWords = /(aqua|water|glycerin|parfum|fragrance|acid|extract|alcohol|glycol|sodium|peg-|butylene|tocopherol|niacinamide)/i.test(value);
+  return lineCount >= 4 || (separators >= 5 && hasInciWords);
+}
+function isLikelyProductUrl(text) {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  if (!/^https?:\/\//i.test(value)) return false;
+  try {
+    const u = new URL(value);
+    return !!u.hostname && u.hostname.includes('.');
+  } catch (_) {
+    return false;
+  }
+}
+async function analyzeFromProductUrl(productUrl) {
+  const locale = navigator.language || 'en-US';
+  const region = ((navigator.language || 'en-US').split('-')[1] || '').toUpperCase();
+  setLoading('Indexing product page…', 'Fetching product details from URL');
+  const submit = await fetch(resolverUrl('/resolver/feedback/add-product'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query: productUrl,
+      productUrl,
+      locale,
+      region
+    })
+  });
+  const data = submit.ok ? await submit.json() : {};
+  if (!submit.ok || !data.accepted || !data.ingestionJobId) {
+    throw new Error('url_submit_failed');
+  }
+  setLoading('Processing product page…', 'This can take a few seconds');
+  const started = Date.now();
+  let finalStatus = null;
+  while (Date.now() - started <= 18000) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    const res = await fetch(resolverUrl(`/resolver/ingestion-status/${encodeURIComponent(data.ingestionJobId)}`));
+    if (!res.ok) continue;
+    const status = await res.json();
+    if (status.state === 'completed' || status.state === 'failed') {
+      finalStatus = status;
+      break;
+    }
+  }
+  if (!finalStatus || finalStatus.state !== 'completed' || !finalStatus.productId) {
+    throw new Error(finalStatus?.failureCode || finalStatus?.reason || 'url_ingest_failed');
+  }
+  const product = await resolveIngestedProduct(productUrl, finalStatus.productId);
+  if (!product) throw new Error('url_resolve_failed');
+  const enriched = await enrichCandidateIngredients(product);
+  if (!enriched?.ingredientsText) throw new Error('url_ingredients_missing');
+  await runAnalysis(
+    enriched.name || 'Product from URL',
+    enriched.brand || '',
+    enriched.ingredientsText,
+    'url',
+    enriched.img || '',
+    enriched.category || ''
+  );
+}
 function inputMatchesSelectedProduct(inputVal, product) {
   if (!product) return false;
   const typed = normalizeQuery(inputVal || '');
@@ -2846,7 +2812,7 @@ async function doScan() {
     document.getElementById('loading').classList.add('show');
     document.getElementById('results').classList.remove('show');
     document.getElementById('results').innerHTML = '';
-    setLoading('Reading ingredient label…', 'Claude Vision is scanning the photo');
+    setLoading('Reading ingredient label…', 'Scanning photo text');
     const photoResult = await analyzePhoto(capturedPhotoBase64);
     if (photoResult.error) {
       document.getElementById('loading').classList.remove('show');
@@ -2919,9 +2885,24 @@ async function doScan() {
       showProductNeedsIngredients(selectedProduct);
       return;
     }
-  } else if (isPastedIngredientList(inputVal)) {
+  } else if (isLikelyIngredientText(inputVal)) {
     // Pasted ingredient list — use directly (gap #3 fix: smarter detection)
     productName='Custom Product'; ingredientsText=inputVal; source='manual';
+  } else if (isLikelyProductUrl(inputVal)) {
+    try {
+      await analyzeFromProductUrl(inputVal);
+      return;
+    } catch (_) {
+      document.getElementById('loading').classList.remove('show');
+      document.getElementById('inputSection').style.display = '';
+      document.getElementById('results').innerHTML = `
+        <div class="not-found">
+          <div class="not-found-title">Could not process this product URL</div>
+          <div class="not-found-desc">Try another product page link, or paste ingredients directly.</div>
+        </div>`;
+      document.getElementById('results').classList.add('show');
+      return;
+    }
   } else {
     setLoading('Searching product…', 'Matching brand and product variants');
     const resolution = await resolveProduct(inputVal, { includeWebFallback: true, forSuggest: false });
