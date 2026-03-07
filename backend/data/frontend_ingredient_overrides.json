@@ -639,6 +639,134 @@
       "al": 0,
       "safe": null,
       "func": "fragrance/essential oil"
+    },
+    "COLLAGEN WATER": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "solvent/skin conditioning"
+    },
+    "TRIPROPYLENE GLYCOL": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "solvent/humectant"
+    },
+    "SODIUM POLYACRYLOYLDIMETHYL TAURATE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "thickener/stabilizer"
+    },
+    "PVM/MA COPOLYMER": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "film former"
+    },
+    "CYANOCOBALAMIN": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "vitamin/skin conditioning"
+    },
+    "SILANETRIOL": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": null,
+      "func": "skin conditioning"
+    },
+    "SOLUBLE ELASTIN": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "protein/skin conditioning"
+    },
+    "MACADAMIA TERNIFOLIA SEED OIL": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient"
+    },
+    "METHYLPROPANEDIOL": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "solvent/humectant"
+    },
+    "DIETHOXYETHYL SUCCINATE": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient/skin conditioning"
+    },
+    "POLYGLYCERYL-10 ISOSTEARATE": {
+      "acne": 2,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emulsifier"
+    },
+    "ORYZA SATIVA (RICE) BRAN WATER": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "botanical water/skin conditioning"
+    },
+    "METHYL GLUCETH-10": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "humectant"
+    },
+    "ORYZA SATIVA (RICE) SEED PROTEIN": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "protein/skin conditioning"
+    },
+    "DEFATTED RICE BRAN EXTRACT": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning/antioxidant"
+    },
+    "ORYZA SATIVA (RICE) BRAN": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "skin conditioning"
     }
   },
   "aliases": {
@@ -728,7 +856,35 @@
     "AMMONIUM POLYACRYLOYLDIMETHYLTAURATE": "AMMONIUM POLYACRYLOYLDIMETHYL TAURATE",
     "PEG-20 METHYL GLUCOSE SESQUISTEARATE": "PEG-20 METHYL GLUCOSE SESQUISTEARATE",
     "CITRUS NOBILIS PEEL OIL / MANDARIN ORANGE PEEL OIL": "CITRUS NOBILIS PEEL OIL",
-    "MANDARIN ORANGE PEEL OIL": "CITRUS NOBILIS PEEL OIL"
+    "MANDARIN ORANGE PEEL OIL": "CITRUS NOBILIS PEEL OIL",
+    "TRIPROPYLENE GLYCOLSODIUM POLYACRYLOYLDIMETHYL TAURATEPVM/MA COPOLYMERCYANOCOBALAMINSILANETRIOLSOLUBLE ELASTIN": "TRIPROPYLENE GLYCOL",
+    "SODIUM POLYACRYLOYLDIMETHYL TAURATEPVM/MA COPOLYMER": "SODIUM POLYACRYLOYLDIMETHYL TAURATE",
+    "PVM MA COPOLYMER": "PVM/MA COPOLYMER",
+    "PVM/MA": "PVM/MA COPOLYMER",
+    "MACADAMIA TERNIFOLIA OIL": "MACADAMIA TERNIFOLIA SEED OIL",
+    "POLYGLYCERYL 10 ISOSTEARATE": "POLYGLYCERYL-10 ISOSTEARATE",
+    "ORYZA SATIVA BRAN WATER": "ORYZA SATIVA (RICE) BRAN WATER",
+    "RICE BRAN WATER": "ORYZA SATIVA (RICE) BRAN WATER",
+    "ORYZA SATIVA RICE SEED PROTEIN": "ORYZA SATIVA (RICE) SEED PROTEIN",
+    "DEFATTED RICE BRANEXTRACT": "DEFATTED RICE BRAN EXTRACT",
+    "ORYZA SATIVA RICE BRAN": "ORYZA SATIVA (RICE) BRAN",
+    "METHYLPROPANEDIOLDIETHOXYETHYL SUCCINATEPOLYGLYCERYL-10 ISOSTEARATECYANOCOBALAMIN": "METHYLPROPANEDIOL",
+    "COLLAGEN WATER": "COLLAGEN WATER",
+    "TRIPROPYLENE GLYCOL": "TRIPROPYLENE GLYCOL",
+    "SODIUM POLYACRYLOYLDIMETHYL TAURATE": "SODIUM POLYACRYLOYLDIMETHYL TAURATE",
+    "PVM/MA COPOLYMER": "PVM/MA COPOLYMER",
+    "CYANOCOBALAMIN": "CYANOCOBALAMIN",
+    "SILANETRIOL": "SILANETRIOL",
+    "SOLUBLE ELASTIN": "SOLUBLE ELASTIN",
+    "MACADAMIA TERNIFOLIA SEED OIL": "MACADAMIA TERNIFOLIA SEED OIL",
+    "METHYLPROPANEDIOL": "METHYLPROPANEDIOL",
+    "DIETHOXYETHYL SUCCINATE": "DIETHOXYETHYL SUCCINATE",
+    "POLYGLYCERYL-10 ISOSTEARATE": "POLYGLYCERYL-10 ISOSTEARATE",
+    "ORYZA SATIVA (RICE) BRAN WATER": "ORYZA SATIVA (RICE) BRAN WATER",
+    "METHYL GLUCETH-10": "METHYL GLUCETH-10",
+    "ORYZA SATIVA (RICE) SEED PROTEIN": "ORYZA SATIVA (RICE) SEED PROTEIN",
+    "DEFATTED RICE BRAN EXTRACT": "DEFATTED RICE BRAN EXTRACT",
+    "ORYZA SATIVA (RICE) BRAN": "ORYZA SATIVA (RICE) BRAN"
   },
   "synonyms": {
     "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
@@ -817,7 +973,35 @@
     "AMMONIUM POLYACRYLOYLDIMETHYLTAURATE": "AMMONIUM POLYACRYLOYLDIMETHYL TAURATE",
     "PEG-20 METHYL GLUCOSE SESQUISTEARATE": "PEG-20 METHYL GLUCOSE SESQUISTEARATE",
     "CITRUS NOBILIS PEEL OIL / MANDARIN ORANGE PEEL OIL": "CITRUS NOBILIS PEEL OIL",
-    "MANDARIN ORANGE PEEL OIL": "CITRUS NOBILIS PEEL OIL"
+    "MANDARIN ORANGE PEEL OIL": "CITRUS NOBILIS PEEL OIL",
+    "TRIPROPYLENE GLYCOLSODIUM POLYACRYLOYLDIMETHYL TAURATEPVM/MA COPOLYMERCYANOCOBALAMINSILANETRIOLSOLUBLE ELASTIN": "TRIPROPYLENE GLYCOL",
+    "SODIUM POLYACRYLOYLDIMETHYL TAURATEPVM/MA COPOLYMER": "SODIUM POLYACRYLOYLDIMETHYL TAURATE",
+    "PVM MA COPOLYMER": "PVM/MA COPOLYMER",
+    "PVM/MA": "PVM/MA COPOLYMER",
+    "MACADAMIA TERNIFOLIA OIL": "MACADAMIA TERNIFOLIA SEED OIL",
+    "POLYGLYCERYL 10 ISOSTEARATE": "POLYGLYCERYL-10 ISOSTEARATE",
+    "ORYZA SATIVA BRAN WATER": "ORYZA SATIVA (RICE) BRAN WATER",
+    "RICE BRAN WATER": "ORYZA SATIVA (RICE) BRAN WATER",
+    "ORYZA SATIVA RICE SEED PROTEIN": "ORYZA SATIVA (RICE) SEED PROTEIN",
+    "DEFATTED RICE BRANEXTRACT": "DEFATTED RICE BRAN EXTRACT",
+    "ORYZA SATIVA RICE BRAN": "ORYZA SATIVA (RICE) BRAN",
+    "METHYLPROPANEDIOLDIETHOXYETHYL SUCCINATEPOLYGLYCERYL-10 ISOSTEARATECYANOCOBALAMIN": "METHYLPROPANEDIOL",
+    "COLLAGEN WATER": "COLLAGEN WATER",
+    "TRIPROPYLENE GLYCOL": "TRIPROPYLENE GLYCOL",
+    "SODIUM POLYACRYLOYLDIMETHYL TAURATE": "SODIUM POLYACRYLOYLDIMETHYL TAURATE",
+    "PVM/MA COPOLYMER": "PVM/MA COPOLYMER",
+    "CYANOCOBALAMIN": "CYANOCOBALAMIN",
+    "SILANETRIOL": "SILANETRIOL",
+    "SOLUBLE ELASTIN": "SOLUBLE ELASTIN",
+    "MACADAMIA TERNIFOLIA SEED OIL": "MACADAMIA TERNIFOLIA SEED OIL",
+    "METHYLPROPANEDIOL": "METHYLPROPANEDIOL",
+    "DIETHOXYETHYL SUCCINATE": "DIETHOXYETHYL SUCCINATE",
+    "POLYGLYCERYL-10 ISOSTEARATE": "POLYGLYCERYL-10 ISOSTEARATE",
+    "ORYZA SATIVA (RICE) BRAN WATER": "ORYZA SATIVA (RICE) BRAN WATER",
+    "METHYL GLUCETH-10": "METHYL GLUCETH-10",
+    "ORYZA SATIVA (RICE) SEED PROTEIN": "ORYZA SATIVA (RICE) SEED PROTEIN",
+    "DEFATTED RICE BRAN EXTRACT": "DEFATTED RICE BRAN EXTRACT",
+    "ORYZA SATIVA (RICE) BRAN": "ORYZA SATIVA (RICE) BRAN"
   },
   "familyRules": []
 }
