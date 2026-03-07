@@ -3166,20 +3166,22 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
   };
 
   const catHTML = cats.map(c => {
-    const isCritical = !c.isAllergen && c.score <= 2;
+    const scoreNumRaw = Number.parseFloat(String(c?.score ?? '').replace(',', '.'));
+    const scoreNum = Number.isFinite(scoreNumRaw) ? Math.max(1, Math.min(5, scoreNumRaw)) : null;
+    const isCritical = !c.isAllergen && scoreNum !== null && scoreNum <= 2;
     const isAllergen = !!c.isAllergen;
 
     // Color class
     const cls = isAllergen ? 'c-allergen'
-               : c.score >= 4.1 ? 'c-safe'
-               : c.score >= 3.5 ? 'c-caution'
+               : scoreNum !== null && scoreNum >= 4.1 ? 'c-safe'
+               : scoreNum !== null && scoreNum >= 3.5 ? 'c-caution'
                : 'c-risk';
 
     // Bar: for non-allergens, bar = risk level (wider = more risk)
     // For allergens, bar = how many detected (max 5 for visual)
     const pct = isAllergen
       ? Math.min(Math.round((c.flagged.length / 5) * 100), 100)
-      : Math.round(((5 - c.score) / 4) * 100);
+      : Math.round(((5 - (scoreNum ?? 3.5)) / 4) * 100);
 
     // Row class
     const rowClass = isCritical    ? 'cat-row cat-critical'
@@ -3224,7 +3226,7 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
       ? (c.flagged.length > 0
           ? `<span class="cat-num c-allergen">${c.flagged.length} detected</span>`
           : `<span class="cat-num c-safe">None</span>`)
-      : `<span class="cat-num ${cls}">${c.score}/5${scoreLabel(c.score)}</span>`;
+      : `<span class="cat-num ${cls}">${scoreNum !== null ? scoreNum.toFixed(1) : '—'}/5${scoreLabel(scoreNum ?? 3.5)}</span>`;
 
     return `
       <div class="${rowClass}">
