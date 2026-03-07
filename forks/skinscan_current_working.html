@@ -1018,9 +1018,6 @@ function applySkinChipUI() {
     const active = skinProfile.conditions.includes(t);
     chip.classList.toggle('active', active);
   });
-  if (skinQuizTriggerEl) {
-    skinQuizTriggerEl.style.display = (skinProfile.conditions || []).length ? 'none' : 'inline-block';
-  }
 }
 function setPrimarySkinType(nextPrimary) {
   skinProfile.primary = PRIMARY_SKIN_TYPES.has(nextPrimary) ? nextPrimary : 'normal';
