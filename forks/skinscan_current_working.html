@@ -25,8 +25,8 @@
   .logo-group { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
   .logo-group.clickable { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   .logo { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 21px; letter-spacing: -0.5px; color: var(--terra); line-height: 1.1; }
-  .logo-sub { font-size: 10.5px; font-weight: 400; color: rgba(26,20,16,0.38); letter-spacing: 0.1em; text-transform: uppercase; line-height: 1; white-space: nowrap; }
-  .logo-tagline { font-size: 10.5px; font-weight: 400; color: rgba(26,20,16,0.42); letter-spacing: 0.01em; line-height: 1.25; margin-top: 2px; white-space: nowrap; }
+  .logo-sub { font-size: 10.5px; font-weight: 400; color: rgba(26,20,16,0.38); letter-spacing: 0.1em; text-transform: none; line-height: 1; white-space: nowrap; }
+  .app-subline { font-size: 12px; color: rgba(26,20,16,0.54); line-height: 1.45; margin: 0 0 14px 2px; }
   .db-tag { font-size: 10px; color: rgba(26,20,16,0.3); background: rgba(26,20,16,0.05); border: 1px solid rgba(26,20,16,0.08); border-radius: 20px; padding: 3px 9px; white-space: nowrap; flex-shrink: 0; }
 
   main { max-width: 500px; margin: 0 auto; padding: 26px 20px 64px; }
@@ -419,12 +419,12 @@
 <header>
   <div class="logo-group clickable" onclick="resetScan()" title="Go to home">
     <span class="logo">SkinScan</span>
-    <span class="logo-sub" style="text-transform:none;letter-spacing:0.01em">know what works for your skin</span>
-    <span class="logo-tagline">check skincare ingredients to see if a product suits your skin</span>
+    <span class="logo-sub">know what works for your skin</span>
   </div>
 </header>
 
 <main>
+  <p class="app-subline">Check skincare ingredients to see if a product suits your skin</p>
   <div class="section-label">My skin is</div>
   <div class="skin-explain" id="skinExplain">We use this to flag ingredients that may not suit your skin profile.</div>
   <div class="skin-chips" id="skinChipsPrimary">
