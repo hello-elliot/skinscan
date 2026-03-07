@@ -2840,6 +2840,21 @@ async function analyzeFromProductUrl(productUrl) {
       continue;
     }
 
+    // Use ingredients extracted during URL ingestion first (source-consistent path).
+    const ingestedIngredients = String(finalStatus.ingredientsText || '').trim();
+    if (ingestedIngredients && ingestedIngredients.length > 20) {
+      const resolvedForLabel = await resolveIngestedProduct(queryText, finalStatus.productId).catch(() => null);
+      await runAnalysis(
+        resolvedForLabel?.name || finalStatus.productName || 'Product from URL',
+        resolvedForLabel?.brand || finalStatus.brand || '',
+        ingestedIngredients,
+        'url',
+        resolvedForLabel?.img || '',
+        resolvedForLabel?.category || ''
+      );
+      return;
+    }
+
     const product = await resolveIngestedProduct(queryText, finalStatus.productId);
     if (!product) {
       lastFailure = 'url_resolve_failed';
