@@ -1497,52 +1497,79 @@ function clearPhoto() {
 // ── analyzePhoto: send image to Claude Vision, extract ingredients ──
 // Images are pre-processed to JPEG by handlePhotoUpload (resize + compress)
 async function analyzePhoto(base64Image) {
-  async function visionCall(prompt) {
-    const res = await fetch(apiUrl(), {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1500,
-        messages: [{ role: 'user', content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Image } },
-          { type: 'text', text: prompt }
-        ]}]
-      })
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message);
-    return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  function parsePhotoExtractionText(text = '') {
+    const out = { productName: 'Unknown Product', brand: '', ingredients: '', lookupOnly: false };
+    const pm = text.match(/PRODUCT:\s*(.+)/i);
+    const bm = text.match(/BRAND:\s*(.+)/i);
+    if (pm && pm[1]) out.productName = pm[1].trim();
+    if (bm && bm[1]) out.brand = bm[1].trim();
+
+    let ingredientsRaw = '';
+    const labeled = text.match(/INGREDIENTS?\s*[:：\-]\s*([\s\S]+)/i);
+    if (labeled && labeled[1]) {
+      ingredientsRaw = labeled[1].trim();
+    } else {
+      const lines = String(text || '').split('\n').map(s => s.trim()).filter(Boolean);
+      const candidateLine = lines.find(line => ((line.match(/[,;•·]/g) || []).length >= 3) && line.length > 40);
+      if (candidateLine) ingredientsRaw = candidateLine;
+    }
+
+    if (ingredientsRaw) {
+      const parsed = parseIngredients(ingredientsRaw);
+      if (parsed.length >= 4) out.ingredients = parsed.join(', ');
+    }
+    if (!out.ingredients && out.productName && out.productName.toLowerCase() !== 'unknown product') {
+      out.lookupOnly = true;
+    }
+    return out;
+  }
+
+  async function visionCall(prompt, timeoutMs = 14000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(apiUrl(), {
+        method: 'POST',
+        headers: authHeaders(),
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1500,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Image } },
+            { type: 'text', text: prompt }
+          ]}]
+        })
+      });
+      if (!res.ok) throw new Error('vision_http_' + res.status);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message || 'vision_error');
+      return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   try {
-    const prompt1 = 'Look at this photo of a cosmetic product. Find the ingredient list (small text on the back/side, starting with "Ingredients:" or "INGREDIENTS:"). Read every ingredient name separated by commas. Reply with ONLY these three lines — no extra text:\nPRODUCT: [product name or Unknown Product]\nBRAND: [brand or blank]\nINGREDIENTS: [full comma-separated ingredient list]\nIf no ingredient list is visible, reply: NOT_FOUND';
+    const prompt1 = 'Look at this photo of a cosmetic product. Find the ingredient list (small text on the back/side, often starting with "Ingredients"). Reply with these fields:\nPRODUCT: [best guess product name or Unknown Product]\nBRAND: [brand or blank]\nINGREDIENTS: [ingredient list exactly as seen; keep commas/semicolons/new lines]\nIf no ingredient list is visible, still return PRODUCT/BRAND if visible and set INGREDIENTS: NOT_FOUND';
 
     const text1 = await visionCall(prompt1);
+    const parsed1 = parsePhotoExtractionText(text1);
+    if (parsed1.ingredients) return parsed1;
+    if (parsed1.lookupOnly) return parsed1;
 
-    if (!text1.includes('NOT_FOUND') && text1.includes('INGREDIENTS:')) {
-      const pm = text1.match(/PRODUCT:\s*(.+)/i);
-      const bm = text1.match(/BRAND:\s*(.+)/i);
-      const im = text1.match(/INGREDIENTS:\s*([\s\S]+)/i);
-      if (im && im[1].trim().length > 10) {
-        return { productName: pm ? pm[1].trim() : 'Unknown Product', brand: bm ? bm[1].trim() : '', ingredients: im[1].trim().split('\n')[0] };
-      }
-    }
-
-    // Retry with a broader prompt
-    const prompt2 = 'This is a cosmetic product packaging photo. Please read ALL visible text and find any ingredient names (chemical/botanical names separated by commas). Start your reply with "INGREDIENTS:" then list them comma-separated on one line. If you see a product name, add PRODUCT: [name] on the next line.';
+    // Retry with broader OCR-style extraction
+    const prompt2 = 'Read all visible text on this cosmetic package. Return:\nPRODUCT: [name or Unknown Product]\nBRAND: [brand or blank]\nINGREDIENTS: [all ingredient tokens exactly as seen, separators preserved]\nIf not visible use INGREDIENTS: NOT_FOUND';
     const text2 = await visionCall(prompt2);
-
-    const pm2 = text2.match(/PRODUCT:\s*(.+)/i);
-    const bm2 = text2.match(/BRAND:\s*(.+)/i);
-    const im2 = text2.match(/INGREDIENTS:\s*([\s\S]+)/i);
-    if (im2 && im2[1].trim().length > 10) {
-      return { productName: pm2 ? pm2[1].trim() : 'Unknown Product', brand: bm2 ? bm2[1].trim() : '', ingredients: im2[1].trim().split('\n')[0] };
-    }
+    const parsed2 = parsePhotoExtractionText(text2);
+    if (parsed2.ingredients || parsed2.lookupOnly) return parsed2;
 
     return { error: "Couldn't read the ingredient list clearly. Try a closer shot with the label flat, good lighting, and text in focus." };
   } catch(e) {
     console.error('analyzePhoto error:', e);
+    if (String(e?.name || '').toLowerCase() === 'aborterror') {
+      return { error: 'Photo scan timed out. Try a closer, sharper shot, or paste ingredients directly.' };
+    }
     return { error: 'Connection error. Check your internet and try again.' };
   }
 }
@@ -2826,6 +2853,32 @@ async function doScan() {
         </div>
         <button class="new-scan" onclick="resetScan()">← Try Again</button>`;
       document.getElementById('results').classList.add('show');
+      return;
+    }
+    if (!photoResult.ingredients && photoResult.lookupOnly) {
+      const lookupQuery = [photoResult.brand, photoResult.productName].filter(Boolean).join(' ').trim();
+      if (!lookupQuery) {
+        showNotFound('Photo');
+        return;
+      }
+      setLoading('Found product name in photo…', 'Looking up full ingredients');
+      const resolution = await resolveProduct(lookupQuery, { includeWebFallback: true, forSuggest: false });
+      const product = resolution?.product || (resolution?.candidates || [])[0];
+      if (product) {
+        const enriched = await enrichCandidateIngredients(product);
+        if (enriched?.ingredientsText) {
+          await runAnalysis(
+            enriched.name || photoResult.productName || 'Photo Product',
+            enriched.brand || photoResult.brand || '',
+            enriched.ingredientsText,
+            'resolver-photo',
+            capturedPhotoBase64 || '',
+            enriched.category || ''
+          );
+          return;
+        }
+      }
+      showNotFound(photoResult.productName || 'Photo Product');
       return;
     }
     // Hand off to analysis with photo-sourced data
