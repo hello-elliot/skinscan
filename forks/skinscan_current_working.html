@@ -2280,9 +2280,20 @@ async function sendCandidateSelectionFeedback(payload) {
     });
   } catch (_) {}
 }
-async function enrichCandidateIngredients(candidate) {
+async function enrichCandidateIngredients(candidate, options = {}) {
   const q = [candidate.brand, candidate.name].filter(Boolean).join(' ').trim() || candidate.name;
   if (!q) return candidate;
+  const direct = await resolveIngredientsDirectSources(candidate);
+  if (direct?.ingredientsText) {
+    if (candidate.productId) {
+      persistResolvedIngredients({
+        ...candidate,
+        ingredientsText: direct.ingredientsText
+      }, direct.source || 'direct');
+    }
+    return direct;
+  }
+  if (options.preferDirectOnly) return candidate;
   if (candidate.productId) {
     const backendResolved = await tryBackendIngredientResolution(candidate, q);
     if (backendResolved?.ingredientsText) return backendResolved;
@@ -2539,10 +2550,24 @@ async function resolveIngredientsDirectSources(product) {
   ];
 
   const settled = await Promise.allSettled(tasks);
-  for (const item of settled) {
-    if (item.status === 'fulfilled' && item.value?.ingredientsText) return item.value;
-  }
-  return null;
+  const candidates = settled
+    .filter(item => item.status === 'fulfilled' && item.value?.ingredientsText)
+    .map(item => item.value);
+  if (!candidates.length) return null;
+
+  const ranked = candidates
+    .map(entry => {
+      const tokenCount = parseIngredients(entry.ingredientsText || '').length;
+      const source = String(entry.source || '').toLowerCase();
+      const sourceWeight = source.includes('inci') ? 0.18 : source.includes('obf') ? 0.14 : 0.1;
+      const score = sourceWeight + Math.min(tokenCount / 120, 0.22);
+      return { entry, tokenCount, score };
+    })
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.tokenCount - a.tokenCount;
+    });
+  return ranked[0].entry;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2799,97 +2824,30 @@ function deriveQueryCandidatesFromUrl(rawUrl) {
   return [...out].map(v => v.replace(/\s+/g, ' ').trim()).filter(Boolean);
 }
 async function analyzeFromProductUrl(productUrl) {
-  const locale = navigator.language || 'en-US';
-  const region = ((navigator.language || 'en-US').split('-')[1] || '').toUpperCase();
   const queryCandidates = deriveQueryCandidatesFromUrl(productUrl);
-  let lastFailure = 'url_ingest_failed';
+  let lastFailure = 'url_ingredients_missing';
 
-  for (const queryText of queryCandidates) {
-    setLoading('Indexing product page…', 'Fetching product details from URL');
-    const submit = await fetch(resolverUrl('/resolver/feedback/add-product'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query: queryText,
-        productUrl,
-        locale,
-        region
-      })
-    });
-    const data = submit.ok ? await submit.json() : {};
-    if (!submit.ok || !data.accepted || !data.ingestionJobId) {
-      lastFailure = 'url_submit_failed';
-      continue;
-    }
-
-    setLoading('Processing product page…', 'This can take a few seconds');
-    const started = Date.now();
-    let finalStatus = null;
-    while (Date.now() - started <= 18000) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      const res = await fetch(resolverUrl(`/resolver/ingestion-status/${encodeURIComponent(data.ingestionJobId)}`));
-      if (!res.ok) continue;
-      const status = await res.json();
-      if (status.state === 'completed' || status.state === 'failed') {
-        finalStatus = status;
-        break;
-      }
-    }
-    if (!finalStatus || finalStatus.state !== 'completed' || !finalStatus.productId) {
-      lastFailure = finalStatus?.failureCode || finalStatus?.reason || 'url_ingest_failed';
-      continue;
-    }
-
-    // Use ingredients extracted during URL ingestion first (source-consistent path).
-    const ingestedIngredients = String(finalStatus.ingredientsText || '').trim();
-    if (ingestedIngredients && ingestedIngredients.length > 20) {
-      const resolvedForLabel = await resolveIngestedProduct(queryText, finalStatus.productId).catch(() => null);
-      await runAnalysis(
-        resolvedForLabel?.name || finalStatus.productName || 'Product from URL',
-        resolvedForLabel?.brand || finalStatus.brand || '',
-        ingestedIngredients,
-        'url',
-        resolvedForLabel?.img || '',
-        resolvedForLabel?.category || ''
-      );
-      return;
-    }
-
-    const product = await resolveIngestedProduct(queryText, finalStatus.productId);
-    if (!product) {
-      lastFailure = 'url_resolve_failed';
-      continue;
-    }
-    const enriched = await enrichCandidateIngredients(product);
-    if (!enriched?.ingredientsText) {
-      lastFailure = 'url_ingredients_missing';
-      continue;
-    }
-    await runAnalysis(
-      enriched.name || 'Product from URL',
-      enriched.brand || '',
-      enriched.ingredientsText,
-      'url',
-      enriched.img || '',
-      enriched.category || ''
-    );
-    return;
-  }
-
-  // Last-resort fallback: resolve by query variants without URL ingestion.
   for (const q of queryCandidates) {
+    setLoading('Reading product page…', 'Extracting product identity');
     const resolution = await resolveProduct(q, { includeWebFallback: true, forSuggest: false });
     const candidate = resolution?.product || (resolution?.candidates || [])[0];
-    if (!candidate) continue;
-    const enriched = await enrichCandidateIngredients(candidate);
+    const identity = candidate || {
+      name: q,
+      brand: '',
+      category: '',
+      img: '',
+      productId: ''
+    };
+    setLoading('Retrieving ingredients…', 'Using INCI + OBF sources');
+    const enriched = await enrichCandidateIngredients(identity, { preferDirectOnly: true });
     if (!enriched?.ingredientsText) continue;
     await runAnalysis(
-      enriched.name || q,
-      enriched.brand || '',
+      enriched.name || identity.name || q,
+      enriched.brand || identity.brand || '',
       enriched.ingredientsText,
-      'url-fallback',
-      enriched.img || '',
-      enriched.category || ''
+      'url',
+      enriched.img || identity.img || '',
+      enriched.category || identity.category || ''
     );
     return;
   }
