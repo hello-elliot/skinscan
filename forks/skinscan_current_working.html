@@ -2912,18 +2912,34 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
         _matchTypeCounts: analysis.matchTypeCount || {}
       };
     } else {
-      // Single scoring authority: if backend analysis is unavailable, do not fall back to legacy local heuristics.
-      document.getElementById('loading').classList.remove('show');
-      document.getElementById('inputSection').style.display = '';
-      document.getElementById('results').innerHTML = `
-        <div class="not-found">
-          <div class="not-found-title">Analysis temporarily unavailable</div>
-          <div class="not-found-desc">Couldn’t run the scoring engine right now. Please retry in a moment.</div>
-        </div>
-        <button class="new-scan" onclick="doScan()">Retry</button>`;
-      document.getElementById('results').classList.add('show');
-      trackEvent('analysis_backend_unavailable', { source: source || 'unknown' });
-      return;
+      // Resilient fallback when backend scorer is temporarily unavailable.
+      trackEvent('analysis_backend_unavailable', { source: source || 'unknown', fallback: 'local' });
+      aiFlags = claudeIngredientCheck(ingredients, skinTypes);
+      unknownIngredients = (aiFlags._unknown || []).filter(u => {
+        if (!u) return false;
+        if (/(read all the geeky details|learn more|click here|ingredients explained|here\s*>>?)/i.test(String(u))) return false;
+        const resolved = resolveIngredient(u);
+        return !resolved?.data;
+      });
+      cats = buildCats(skinTypes, profileMode, aiFlags, skinProfile);
+      const unknownCount = unknownIngredients.length;
+      overall = cats.length ? overallScore(cats, unknownCount, ingredients.length) : 5;
+      const acneProneProfile = (skinProfile.conditions || []).includes('acne-prone');
+      const acneCat = cats.find(c => c.key === 'acne');
+      if (acneProneProfile && acneCat) {
+        overall = Math.max(overall, Number(acneCat.score || 5));
+      }
+      if (acneProneProfile && unknownCount > 0) {
+        const coveragePct = ingredients.length ? (ingredients.length - unknownCount) / ingredients.length : 1;
+        if (coveragePct < 0.75) {
+          const unknownPenalty = Math.min(0.2, unknownCount * 0.05);
+          overall = Math.max(1, Number((overall - unknownPenalty).toFixed(1)));
+        }
+      }
+      verdict = verdictFromScore(overall);
+      const localConfidence = coverageConfidence(ingredients.length, unknownCount);
+      confLabel = localConfidence.label;
+      confPct = localConfidence.pct;
     }
 
     lastAnalysisData = { productName, brand, ingredientsText, source, resultImage, resultCategory };
@@ -2968,36 +2984,32 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
 function acneSafetyScore(flagged, options = {}) {
   if (!flagged.length) return 5;
   const isAcneProne = !!options.acneProne;
-  let burden = 0;
-  let moderateOrHigher = 0;
-  let highRiskEarly = 0;
-  for (const f of flagged) {
-    const a = f.acneVal || 0;  // raw Fulton value attached at flag-time
-    const pos = Number.isFinite(f.positionFrac) ? f.positionFrac : 1;
-    const positionWeight = pos <= 0.25 ? 1.0 : pos <= 0.5 ? 0.7 : 0.45;
-    if (a >= 5)      burden += (isAcneProne ? 1.35 : 1.0) * positionWeight;
-    else if (a === 4) burden += (isAcneProne ? 1.0 : 0.7) * positionWeight;
-    else if (a === 3) burden += (isAcneProne ? 0.65 : 0.4) * positionWeight;
-    else if (a === 2) burden += (isAcneProne ? 0.4 : 0.25) * positionWeight;
-    // acne=1: shown in list as informational, no burden (Fulton 1 = clinically negligible)
-    // occlusive/wax acne=0: no burden, flagged via separate branch in claudeIngredientCheck
-    if (a >= 2) moderateOrHigher += 1;
-    if (a >= 4 && pos <= 0.33) highRiskEarly += 1;
+  const signals = flagged.filter(f => Number(f?.acneVal || 0) >= 2);
+  const moderate = signals.filter(f => {
+    const a = Number(f?.acneVal || 0);
+    return a === 2 || a === 3;
+  });
+  const high = signals.filter(f => Number(f?.acneVal || 0) >= 4);
+  const isTop = (f) => {
+    const pos = Number.isFinite(f?.positionFrac) ? Number(f.positionFrac) : 1;
+    return pos <= 0.2;
+  };
+  const topModerate = moderate.filter(isTop).length;
+  const topHigh = high.filter(isTop).length;
+
+  let score = isAcneProne ? 4.4 : 4.6;
+  if (moderate.length === 1 && high.length === 0) {
+    score = topModerate > 0 ? 4.3 : 4.6;
+  } else if (high.length >= 2 || (high.length >= 1 && moderate.length >= 2)) {
+    score = 3.0;
+  } else if (topHigh >= 1) {
+    score = 3.5;
+  } else if (moderate.length >= 2) {
+    score = topModerate > 0 ? 3.8 : 4.0;
+  } else if (high.length === 1) {
+    score = 3.9;
   }
-  if (flagged.length >= 4) burden += isAcneProne ? 0.3 : 0.2;
-  let score = 1;
-  if (burden < 0.3) score = 5;
-  else if (burden < 0.8) score = 4;
-  else if (burden < 1.5) score = 3;
-  else if (burden < 2.2) score = 2;
-  // Any detected comedogenic signal should not be displayed as "No risk".
-  if (moderateOrHigher >= 1) score = Math.min(score, 4);
-  // Acne-prone guardrails: do not show a perfect score with meaningful comedogenic signal.
-  if (isAcneProne) {
-    if (moderateOrHigher >= 2) score = Math.min(score, 4);
-    if (highRiskEarly >= 1 || moderateOrHigher >= 3) score = Math.min(score, 3);
-  }
-  return score;
+  return Number(Math.max(1, Math.min(5, score)).toFixed(1));
 }
 
 function genericSafetyScore(flagged) {
