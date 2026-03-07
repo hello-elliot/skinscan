@@ -2029,6 +2029,31 @@ function cleanCandidateText(v, max = 180) {
     .trim()
     .slice(0, max);
 }
+function isNoisyCandidateName(value) {
+  const v = String(value || '').toLowerCase();
+  return /https?:\/\/|www\.|\.com|\.net|\.org|\/|%[0-9a-f]{2}|#|&|=/.test(v);
+}
+function filterCandidatesForQuery(query, candidates = [], options = {}) {
+  const normalizedQuery = normalizeQuery(query || '');
+  const stop = new Set(['the', 'and', 'for', 'with', 'from', 'skin', 'care', 'cream', 'serum', 'gel', 'lotion', 'mask', 'spf']);
+  const strongTokens = normalizedQuery.split(/\s+/).filter(t => t.length >= 3 && !stop.has(t));
+  const forSuggest = options.forSuggest !== false;
+  return (candidates || []).filter(c => {
+    const name = String(c?.name || '');
+    const brand = String(c?.brand || '');
+    if (!name.trim()) return false;
+    if (isNoisyCandidateName(name) || isNoisyCandidateName(brand)) return false;
+    const display = normalizeQuery(`${brand} ${name}`);
+    const nameNorm = normalizeQuery(name);
+    const ns = Number(c?.nameSimilarity || wordOverlapScore(normalizedQuery, nameNorm));
+    const bs = Number(c?.brandSimilarity || wordOverlapScore(normalizedQuery, brand));
+    const exactish = (normalizedQuery && (display.includes(normalizedQuery) || normalizedQuery.includes(nameNorm)));
+    const strongHits = strongTokens.filter(t => display.includes(t)).length;
+    if (exactish) return true;
+    if (forSuggest) return ns >= 0.62 || (ns >= 0.48 && bs >= 0.38) || strongHits >= 2;
+    return ns >= 0.5 || (ns >= 0.42 && bs >= 0.3) || strongHits >= 2;
+  });
+}
 function mapBackendProduct(p) {
   if (!p) return null;
   const rawBrand = cleanCandidateText(p.brand || '', 80);
@@ -2199,8 +2224,9 @@ async function triggerSuggest(query) {
   }
   const unknownBrandCandidates = (resolution.candidates || []).filter(c => Number(c.brandSimilarity || 0) >= 0.55 || Number(c.nameSimilarity || 0) >= 0.86);
   if (resolution.state === 'candidate_list' && resolution.decisionReason === 'unknown_brand') {
-    if (unknownBrandCandidates.length) {
-      showSuggestions(unknownBrandCandidates.slice(0, 7), {
+    const filtered = filterCandidatesForQuery(query, unknownBrandCandidates, { forSuggest: true });
+    if (filtered.length) {
+      showSuggestions(filtered.slice(0, 7), {
         confirmMode: false,
         meta: {
           query,
@@ -2213,11 +2239,16 @@ async function triggerSuggest(query) {
       return;
     }
     hideAddProductCapture();
-    setSearchState('idle', { query });
+    setSearchState('empty', { query });
     return;
   }
   if (resolution.state === 'candidate_list' && resolution.candidates?.length) {
-    showSuggestions(resolution.candidates.slice(0, 7), {
+    const filtered = filterCandidatesForQuery(query, resolution.candidates, { forSuggest: true });
+    if (!filtered.length) {
+      setSearchState('empty', { query });
+      return;
+    }
+    showSuggestions(filtered.slice(0, 7), {
       confirmMode: false,
       meta: {
         query,
@@ -2943,7 +2974,7 @@ async function doScan() {
     if (resolution.state === 'candidate_list') {
       document.getElementById('loading').classList.remove('show');
       document.getElementById('inputSection').style.display = '';
-      const unknownBrandCandidates = (resolution.candidates || []).filter(c => Number(c.brandSimilarity || 0) >= 0.55 || Number(c.nameSimilarity || 0) >= 0.86);
+      const unknownBrandCandidates = filterCandidatesForQuery(inputVal, (resolution.candidates || []).filter(c => Number(c.brandSimilarity || 0) >= 0.55 || Number(c.nameSimilarity || 0) >= 0.86), { forSuggest: false });
       if (resolution.decisionReason === 'unknown_brand' && !unknownBrandCandidates.length) {
         showCandidateStatusMessage('No close match yet. Add a product URL below for fast indexing.');
         showAddProductCapture({
@@ -2954,7 +2985,11 @@ async function doScan() {
       } else if (resolution.candidates?.length) {
         const renderedCandidates = resolution.decisionReason === 'unknown_brand'
           ? unknownBrandCandidates
-          : (resolution.candidates || []);
+          : filterCandidatesForQuery(inputVal, (resolution.candidates || []), { forSuggest: false });
+        if (!renderedCandidates.length) {
+          setSearchState('empty', { query: inputVal });
+          return;
+        }
         showSuggestions(renderedCandidates, {
           confirmMode: false,
           meta: {
