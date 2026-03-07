@@ -2784,53 +2784,102 @@ function deriveQueryFromUrl(rawUrl) {
     return rawUrl;
   }
 }
+function deriveQueryCandidatesFromUrl(rawUrl) {
+  const out = new Set();
+  const base = deriveQueryFromUrl(rawUrl);
+  if (base) out.add(base);
+  try {
+    const u = new URL(String(rawUrl || '').trim());
+    const hostPart = (u.hostname || '').replace(/^www\./i, '').replace(/\.[a-z.]+$/i, '').replace(/[-_]+/g, ' ').trim();
+    const pathParts = (u.pathname || '').split('/').filter(Boolean).map(x => x.replace(/[-_]+/g, ' ').trim()).filter(Boolean);
+    if (hostPart && pathParts.length) out.add(`${hostPart} ${pathParts[pathParts.length - 1]}`.trim());
+    if (pathParts.length) out.add(pathParts[pathParts.length - 1]);
+    if (pathParts.length > 1) out.add(pathParts.slice(-2).join(' '));
+  } catch (_) {}
+  return [...out].map(v => v.replace(/\s+/g, ' ').trim()).filter(Boolean);
+}
 async function analyzeFromProductUrl(productUrl) {
   const locale = navigator.language || 'en-US';
   const region = ((navigator.language || 'en-US').split('-')[1] || '').toUpperCase();
-  const queryText = deriveQueryFromUrl(productUrl);
-  setLoading('Indexing product page…', 'Fetching product details from URL');
-  const submit = await fetch(resolverUrl('/resolver/feedback/add-product'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      query: queryText,
-      productUrl,
-      locale,
-      region
-    })
-  });
-  const data = submit.ok ? await submit.json() : {};
-  if (!submit.ok || !data.accepted || !data.ingestionJobId) {
-    throw new Error('url_submit_failed');
-  }
-  setLoading('Processing product page…', 'This can take a few seconds');
-  const started = Date.now();
-  let finalStatus = null;
-  while (Date.now() - started <= 18000) {
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    const res = await fetch(resolverUrl(`/resolver/ingestion-status/${encodeURIComponent(data.ingestionJobId)}`));
-    if (!res.ok) continue;
-    const status = await res.json();
-    if (status.state === 'completed' || status.state === 'failed') {
-      finalStatus = status;
-      break;
+  const queryCandidates = deriveQueryCandidatesFromUrl(productUrl);
+  let lastFailure = 'url_ingest_failed';
+
+  for (const queryText of queryCandidates) {
+    setLoading('Indexing product page…', 'Fetching product details from URL');
+    const submit = await fetch(resolverUrl('/resolver/feedback/add-product'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: queryText,
+        productUrl,
+        locale,
+        region
+      })
+    });
+    const data = submit.ok ? await submit.json() : {};
+    if (!submit.ok || !data.accepted || !data.ingestionJobId) {
+      lastFailure = 'url_submit_failed';
+      continue;
     }
+
+    setLoading('Processing product page…', 'This can take a few seconds');
+    const started = Date.now();
+    let finalStatus = null;
+    while (Date.now() - started <= 18000) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      const res = await fetch(resolverUrl(`/resolver/ingestion-status/${encodeURIComponent(data.ingestionJobId)}`));
+      if (!res.ok) continue;
+      const status = await res.json();
+      if (status.state === 'completed' || status.state === 'failed') {
+        finalStatus = status;
+        break;
+      }
+    }
+    if (!finalStatus || finalStatus.state !== 'completed' || !finalStatus.productId) {
+      lastFailure = finalStatus?.failureCode || finalStatus?.reason || 'url_ingest_failed';
+      continue;
+    }
+
+    const product = await resolveIngestedProduct(queryText, finalStatus.productId);
+    if (!product) {
+      lastFailure = 'url_resolve_failed';
+      continue;
+    }
+    const enriched = await enrichCandidateIngredients(product);
+    if (!enriched?.ingredientsText) {
+      lastFailure = 'url_ingredients_missing';
+      continue;
+    }
+    await runAnalysis(
+      enriched.name || 'Product from URL',
+      enriched.brand || '',
+      enriched.ingredientsText,
+      'url',
+      enriched.img || '',
+      enriched.category || ''
+    );
+    return;
   }
-  if (!finalStatus || finalStatus.state !== 'completed' || !finalStatus.productId) {
-    throw new Error(finalStatus?.failureCode || finalStatus?.reason || 'url_ingest_failed');
+
+  // Last-resort fallback: resolve by query variants without URL ingestion.
+  for (const q of queryCandidates) {
+    const resolution = await resolveProduct(q, { includeWebFallback: true, forSuggest: false });
+    const candidate = resolution?.product || (resolution?.candidates || [])[0];
+    if (!candidate) continue;
+    const enriched = await enrichCandidateIngredients(candidate);
+    if (!enriched?.ingredientsText) continue;
+    await runAnalysis(
+      enriched.name || q,
+      enriched.brand || '',
+      enriched.ingredientsText,
+      'url-fallback',
+      enriched.img || '',
+      enriched.category || ''
+    );
+    return;
   }
-  const product = await resolveIngestedProduct(queryText, finalStatus.productId);
-  if (!product) throw new Error('url_resolve_failed');
-  const enriched = await enrichCandidateIngredients(product);
-  if (!enriched?.ingredientsText) throw new Error('url_ingredients_missing');
-  await runAnalysis(
-    enriched.name || 'Product from URL',
-    enriched.brand || '',
-    enriched.ingredientsText,
-    'url',
-    enriched.img || '',
-    enriched.category || ''
-  );
+
+  throw new Error(lastFailure);
 }
 function inputMatchesSelectedProduct(inputVal, product) {
   if (!product) return false;
