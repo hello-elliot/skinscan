@@ -30,21 +30,23 @@
   main { max-width: 500px; margin: 0 auto; padding: 26px 20px 64px; }
 
   /* ── SECTION LABEL ── */
-  .section-label { font-family: 'Syne', sans-serif; font-size: 10.5px; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase; color: rgba(26,20,16,0.35); margin-bottom: 10px; }
+  .section-label { font-family: 'Syne', sans-serif; font-size: 11.5px; font-weight: 700; letter-spacing: 0.11em; text-transform: uppercase; color: rgba(26,20,16,0.4); margin-bottom: 12px; }
 
   /* ── SKIN CHIPS ── */
-  .skin-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 26px; }
+  .skin-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 22px; }
   .chip { padding: 7px 15px; border-radius: 50px; border: 1.5px solid rgba(26,20,16,0.18); font-size: 13px; cursor: pointer; background: transparent; color: var(--dark); transition: all 0.15s; -webkit-tap-highlight-color: transparent; }
   .chip:hover { border-color: var(--terra); color: var(--terra); }
   .chip.active { background: var(--terra); border-color: var(--terra); color: white; }
+  .skin-explain { font-size: 12px; color: rgba(26,20,16,0.52); margin: -4px 0 10px 2px; line-height: 1.45; }
+  .section-divider { height: 1px; background: rgba(26,20,16,0.09); margin: 14px 0 16px; }
   .skin-quiz-trigger {
     display: inline-block;
-    margin: -2px 0 14px 2px;
+    margin: 2px 0 10px 2px;
     border: none;
     background: none;
     padding: 0;
-    font-size: 11.5px;
-    color: rgba(26,20,16,0.42);
+    font-size: 12px;
+    color: rgba(26,20,16,0.56);
     text-decoration: underline;
     text-underline-offset: 2px;
     cursor: pointer;
@@ -384,6 +386,7 @@
 
 <main>
   <div class="section-label">My skin is</div>
+  <div class="skin-explain">We use this to flag ingredients that may not suit your skin profile.</div>
   <div style="font-size:11px;color:rgba(26,20,16,0.42);margin:0 0 7px 2px;letter-spacing:.01em">Primary type</div>
   <div class="skin-chips" id="skinChipsPrimary">
     <button class="chip" data-type="normal">Normal</button>
@@ -393,18 +396,19 @@
   </div>
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 7px 2px">
     <div style="font-size:11px;color:rgba(26,20,16,0.42);letter-spacing:.01em">Conditions</div>
-    <button class="skin-quiz-trigger" id="skinQuizTrigger" type="button" style="margin:0 0 0 8px">Not sure? Find my skin profile</button>
   </div>
   <div class="skin-chips" id="skinChipsConditions" style="margin-bottom:14px">
     <button class="chip" data-type="acne-prone">Acne-prone</button>
     <button class="chip" data-type="sensitive">Sensitive / Reactive</button>
   </div>
+  <button class="skin-quiz-trigger" id="skinQuizTrigger" type="button">Not sure? Find my skin profile</button>
   <div id="skinHint" style="font-size:11px;color:rgba(196,98,45,0.65);margin:-4px 0 6px 2px;display:none">
     ↑ Normal cannot be combined with acne-prone or sensitive/reactive.
   </div>
+  <div class="section-divider"></div>
 
   <div id="inputSection">
-    <div class="section-label">What product?</div>
+    <div class="section-label" style="margin-top:2px">What product?</div>
     <div class="source-tabs" style="display:none" aria-hidden="true"></div>
     <div class="input-wrapper">
       <textarea id="productInput" placeholder="Type a product name, or paste the ingredient list…" rows="3"></textarea>
@@ -439,7 +443,7 @@
     <div class="add-product-panel" id="addProductPanel"></div>
     <p class="hint" id="searchHint">Photograph a label · Dictate · or paste ingredients</p>
 
-    <button class="analyze-btn" onclick="doScan()">Analyze Ingredients →</button>
+    <button class="analyze-btn" onclick="doScan()">Scan for My Skin →</button>
     <div style="margin-top:14px;text-align:center">
 
     </div>
@@ -455,7 +459,7 @@
 
   <div class="results" id="results"></div>
 
-  <div class="attribution">Data from public cosmetic sources</div>
+  <div class="attribution">Powered by multi-source cosmetic formulation data</div>
 </main>
 
 <div class="skin-quiz-overlay" id="skinQuizOverlay" aria-hidden="true">
@@ -1014,6 +1018,9 @@ function applySkinChipUI() {
     const active = skinProfile.conditions.includes(t);
     chip.classList.toggle('active', active);
   });
+  if (skinQuizTriggerEl) {
+    skinQuizTriggerEl.style.display = (skinProfile.conditions || []).length ? 'none' : 'inline-block';
+  }
 }
 function setPrimarySkinType(nextPrimary) {
   skinProfile.primary = PRIMARY_SKIN_TYPES.has(nextPrimary) ? nextPrimary : 'normal';
