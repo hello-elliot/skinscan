@@ -9,6 +9,7 @@
 <meta name="twitter:title" content="SkinScan | Personalized Ingredient Compatibility Check">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%23C4622D'/%3E%3Cstop offset='100%25' stop-color='%23D4834A'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='%23F5F0E8'/%3E%3Crect x='4' y='4' width='56' height='56' rx='12' fill='url(%23g)'/%3E%3Cpath d='M32 16c-7 9-12 13-12 21 0 7 5 12 12 12s12-5 12-12c0-8-5-12-12-21Z' fill='%23F5F0E8'/%3E%3Ccircle cx='37' cy='30' r='3' fill='%23E8C4A0'/%3E%3C/svg%3E">
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Sans:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
   :root {
     --cream: #F5F0E8; --dark: #1A1410; --terra: #C4622D;
@@ -1000,7 +1001,6 @@ let selectedProduct = null;
 let capturedPhotoBase64 = null;   // base64 image data from camera
 let lastAnalysisData = null;      // gap #4: store last result for re-analysis
 let autoReanalyzeTimer = null;
-let photoScanServiceAvailable = true;
 let latestSuggestRequestId = 0;
 let activeSuggestAbortController = null;
 let searchState = 'idle';
@@ -1324,7 +1324,6 @@ document.querySelectorAll('#skinChipsConditions .chip').forEach(c => {
 });
 applySkinChipUI();
 applyOnboardingUi();
-initPhotoServiceHealth();
 if (skinQuizTriggerEl) skinQuizTriggerEl.addEventListener('click', openSkinQuiz);
 if (skinQuizCloseEl) skinQuizCloseEl.addEventListener('click', () => closeSkinQuiz('close_button'));
 if (skinQuizOverlayEl) {
@@ -1438,44 +1437,8 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // PHOTO / CAMERA MODE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function showPhotoServiceUnavailableMessage() {
-  document.getElementById('loading').classList.remove('show');
-  document.getElementById('inputSection').style.display = '';
-  document.getElementById('results').innerHTML = `
-    <div class="not-found">
-      <div class="not-found-title">Photo scan is temporarily unavailable</div>
-      <div class="not-found-desc">
-        The image scanning service is currently unreachable.<br><br>
-        You can still search by product name or paste ingredients directly.
-      </div>
-    </div>`;
-  document.getElementById('results').classList.add('show');
-}
 function openPhotoCapture() {
-  if (!photoScanServiceAvailable) {
-    showPhotoServiceUnavailableMessage();
-    return;
-  }
   document.getElementById('cameraInput').click();
-}
-async function initPhotoServiceHealth() {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3200);
-    const res = await fetch(apiUrl().replace('/v1/messages', ''), { method: 'GET', signal: controller.signal });
-    clearTimeout(timer);
-    if (!res.ok) throw new Error('photo_service_unhealthy');
-    const payload = await res.json().catch(() => ({}));
-    if (payload && payload.ok === false) throw new Error('photo_service_unhealthy');
-    photoScanServiceAvailable = true;
-  } catch (_) {
-    photoScanServiceAvailable = false;
-    const btn = document.getElementById('photoBtn');
-    if (btn) {
-      btn.style.opacity = '0.45';
-      btn.title = 'Photo scan temporarily unavailable';
-    }
-  }
 }
 async function handlePhotoUpload(event) {
   const file = event.target.files[0];
@@ -1535,84 +1498,37 @@ function clearPhoto() {
   document.querySelector('.source-tabs').style.pointerEvents = '';
 }
 
-// ── analyzePhoto: send image to Claude Vision, extract ingredients ──
+// ── analyzePhoto: on-device OCR via Tesseract ──
 // Images are pre-processed to JPEG by handlePhotoUpload (resize + compress)
 async function analyzePhoto(base64Image) {
-  function parsePhotoExtractionText(text = '') {
-    const out = { productName: 'Unknown Product', brand: '', ingredients: '', lookupOnly: false };
-    const pm = text.match(/PRODUCT:\s*(.+)/i);
-    const bm = text.match(/BRAND:\s*(.+)/i);
-    if (pm && pm[1]) out.productName = pm[1].trim();
-    if (bm && bm[1]) out.brand = bm[1].trim();
-
-    let ingredientsRaw = '';
-    const labeled = text.match(/INGREDIENTS?\s*[:：\-]\s*([\s\S]+)/i);
-    if (labeled && labeled[1]) {
-      ingredientsRaw = labeled[1].trim();
-    } else {
-      const lines = String(text || '').split('\n').map(s => s.trim()).filter(Boolean);
-      const candidateLine = lines.find(line => ((line.match(/[,;•·]/g) || []).length >= 3) && line.length > 40);
-      if (candidateLine) ingredientsRaw = candidateLine;
-    }
-
-    if (ingredientsRaw) {
-      const parsed = parseIngredients(ingredientsRaw);
-      if (parsed.length >= 4) out.ingredients = parsed.join(', ');
-    }
-    if (!out.ingredients && out.productName && out.productName.toLowerCase() !== 'unknown product') {
-      out.lookupOnly = true;
-    }
-    return out;
-  }
-
-  async function visionCall(prompt, timeoutMs = 14000) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(apiUrl(), {
-        method: 'POST',
-        headers: authHeaders(),
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 1500,
-          messages: [{ role: 'user', content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Image } },
-            { type: 'text', text: prompt }
-          ]}]
-        })
-      });
-      if (!res.ok) throw new Error('vision_http_' + res.status);
-      const data = await res.json();
-      if (data.error) throw new Error(data.error.message || 'vision_error');
-      return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
   try {
-    const prompt1 = 'Look at this photo of a cosmetic product. Find the ingredient list (small text on the back/side, often starting with "Ingredients"). Reply with these fields:\nPRODUCT: [best guess product name or Unknown Product]\nBRAND: [brand or blank]\nINGREDIENTS: [ingredient list exactly as seen; keep commas/semicolons/new lines]\nIf no ingredient list is visible, still return PRODUCT/BRAND if visible and set INGREDIENTS: NOT_FOUND';
+    if (!window.Tesseract || typeof window.Tesseract.recognize !== 'function') {
+      return { error: 'Photo OCR is not loaded. Refresh the page or paste ingredients directly.' };
+    }
+    const dataUrl = `data:image/jpeg;base64,${base64Image}`;
+    const result = await window.Tesseract.recognize(dataUrl, 'eng');
+    const rawText = String(result?.data?.text || '').replace(/\r/g, '\n').trim();
+    if (!rawText) {
+      return { error: "Couldn't read the ingredient list clearly. Try a closer shot with the label flat, good lighting, and text in focus." };
+    }
 
-    const text1 = await visionCall(prompt1);
-    const parsed1 = parsePhotoExtractionText(text1);
-    if (parsed1.ingredients) return parsed1;
-    if (parsed1.lookupOnly) return parsed1;
+    const productGuessMatch = rawText.match(/^([A-Z0-9][^\n]{4,80})/im);
+    const productName = productGuessMatch ? productGuessMatch[1].trim() : 'Unknown Product';
 
-    // Retry with broader OCR-style extraction
-    const prompt2 = 'Read all visible text on this cosmetic package. Return:\nPRODUCT: [name or Unknown Product]\nBRAND: [brand or blank]\nINGREDIENTS: [all ingredient tokens exactly as seen, separators preserved]\nIf not visible use INGREDIENTS: NOT_FOUND';
-    const text2 = await visionCall(prompt2);
-    const parsed2 = parsePhotoExtractionText(text2);
-    if (parsed2.ingredients || parsed2.lookupOnly) return parsed2;
-
-    return { error: "Couldn't read the ingredient list clearly. Try a closer shot with the label flat, good lighting, and text in focus." };
+    const ingredientBlock =
+      (rawText.match(/ingredients?\s*[:：\-]\s*([\s\S]{40,5000})/i) || [])[1] ||
+      rawText;
+    const parsed = parseIngredients(ingredientBlock);
+    if (parsed.length >= 4) {
+      return { productName, brand: '', ingredients: parsed.join(', '), lookupOnly: false };
+    }
+    if (productName && productName.toLowerCase() !== 'unknown product') {
+      return { productName, brand: '', ingredients: '', lookupOnly: true };
+    }
+    return { error: "Couldn't detect enough ingredients from this photo. Try a sharper close-up, or paste ingredients directly." };
   } catch(e) {
     console.error('analyzePhoto error:', e);
-    if (String(e?.name || '').toLowerCase() === 'aborterror') {
-      return { error: 'Photo scan timed out. Try a closer, sharper shot, or paste ingredients directly.' };
-    }
-    photoScanServiceAvailable = false;
-    return { error: 'Photo scan service is currently unavailable. Try product search or paste ingredients.' };
+    return { error: 'Photo scan failed on this image. Try better lighting/focus, or paste ingredients directly.' };
   }
 }
 
