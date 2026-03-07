@@ -290,14 +290,20 @@
 
 <main>
   <div class="section-label">My skin is</div>
-  <div class="skin-chips" id="skinChips">
+  <div style="font-size:11px;color:rgba(26,20,16,0.48);margin:0 0 7px 2px;letter-spacing:.08em;text-transform:uppercase">Primary type (choose one)</div>
+  <div class="skin-chips" id="skinChipsPrimary">
+    <button class="chip" data-type="normal">Normal</button>
+    <button class="chip" data-type="dry">Dry</button>
+    <button class="chip" data-type="oily">Oily</button>
+    <button class="chip" data-type="combination">Combination</button>
+  </div>
+  <div style="font-size:11px;color:rgba(26,20,16,0.48);margin:2px 0 7px 2px;letter-spacing:.08em;text-transform:uppercase">Conditions (optional)</div>
+  <div class="skin-chips" id="skinChipsConditions" style="margin-bottom:14px">
     <button class="chip" data-type="acne-prone">Acne-prone</button>
     <button class="chip" data-type="sensitive">Sensitive / Reactive</button>
-    <button class="chip" data-type="dry">Dry</button>
-    <button class="chip" data-type="normal" title="Checks EU allergens only — no pore-clogging or irritant analysis">Normal</button>
   </div>
   <div id="skinHint" style="font-size:11px;color:rgba(196,98,45,0.65);margin:-4px 0 6px 2px;display:none">
-    ↑ Select at least one skin type for a full analysis
+    ↑ Normal cannot be combined with acne-prone or sensitive/reactive.
   </div>
 
   <div id="inputSection">
@@ -366,6 +372,17 @@ const INGREDIENT_DB = {"WATER":{"acne":0,"irr":0,"dry":0,"al":0,"safe":true,"fun
 // ── Normalization alias map ──────────────────────────────────────────────────
 // Maps non-standard / regional / common names -> canonical DB keys
 Object.assign(INGREDIENT_DB, {
+  // Acne calibration overrides (reviewed for acne-prone handling)
+  'STEARIC ACID': { acne: 2, irr: 0, dry: 0, al: 0, safe: true, func: 'emollient' },
+  'PALMITIC ACID': { acne: 2, irr: 0, dry: 0, al: 0, safe: true, func: 'emollient' },
+  'GLYCERYL STEARATE': { acne: 2, irr: 0, dry: 0, al: 0, safe: true, func: 'emollient' },
+  'GLYCERYL OLEATE': { acne: 3, irr: 0, dry: 0, al: 0, safe: true, func: 'emollient' },
+  'SHEA BUTTER': { acne: 2, irr: 0, dry: 0, al: 0, safe: true, func: 'emollient' },
+  'BUTYROSPERMUM PARKII BUTTER': { acne: 2, irr: 0, dry: 0, al: 0, safe: true, func: 'emollient' },
+  'PHYTOSTERYL OLEATE': { acne: 3, irr: 0, dry: 0, al: 0, safe: true, func: 'emollient' },
+  // Recent unknowns mapped
+  'BETULA ALBA JUICE': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'humectant/soothing' },
+  'PENTAERYTHRITYL TETRAETHYLHEXANOATE': { acne: 2, irr: 0, dry: 0, al: 0, safe: true, func: 'emollient' },
   'METHYL GLUCETH-20': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'humectant' },
   'TRIPEPTIDE-32': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'peptide' },
   'YEAST EXTRACT': { acne: 0, irr: 0, dry: 0, al: 0, safe: true, func: 'ferment' },
@@ -381,6 +398,9 @@ Object.assign(INGREDIENT_DB, {
 const INCI_ALIASES = {
   // Water variants
   'AQUA': 'WATER',
+  'GLYCERINE': 'GLYCERIN',
+  'BETULA ALBA JUICE (10000 PPM)': 'BETULA ALBA JUICE',
+  'BETULA ALBA JUICE': 'BETULA ALBA JUICE',
   'AQUA/WATER': 'WATER',
   'WATER/AQUA': 'WATER',
   'EAU': 'WATER',
@@ -790,17 +810,41 @@ function cacheSet(prefix, q, val) { if (val) _searchCache[cacheKey(prefix, q)] =
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // STATE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const PRIMARY_SKIN_TYPES = new Set(['normal', 'dry']);
+const PRIMARY_SKIN_TYPES = new Set(['normal', 'dry', 'oily', 'combination']);
 const CONDITION_SKIN_TYPES = new Set(['acne-prone', 'sensitive']);
-function normalizeSelectedSkinTypes(saved = []) {
-  const out = new Set(Array.isArray(saved) ? saved : []);
-  if (out.has('dry') && out.has('normal')) out.delete('normal');
-  return out;
+function readSkinProfile() {
+  const defaults = { primary: 'normal', conditions: [] };
+  try {
+    const saved = JSON.parse(localStorage.getItem('skinscan_skin_profile') || 'null');
+    if (saved && typeof saved === 'object') {
+      const primary = PRIMARY_SKIN_TYPES.has(saved.primary) ? saved.primary : 'normal';
+      const conditions = Array.isArray(saved.conditions)
+        ? saved.conditions.filter(c => CONDITION_SKIN_TYPES.has(c))
+        : [];
+      return primary === 'normal' ? { primary, conditions: [] } : { primary, conditions: [...new Set(conditions)] };
+    }
+  } catch (_) {}
+  // Backward compatibility with old multi-select storage.
+  try {
+    const legacy = JSON.parse(localStorage.getItem('skinscan_skin_types') || '[]');
+    if (Array.isArray(legacy) && legacy.length) {
+      const hasDry = legacy.includes('dry');
+      const conditions = legacy.filter(c => CONDITION_SKIN_TYPES.has(c));
+      const primary = hasDry ? 'dry' : 'normal';
+      return primary === 'normal' ? { primary, conditions: [] } : { primary, conditions: [...new Set(conditions)] };
+    }
+  } catch (_) {}
+  return defaults;
 }
-// Restore skin type from localStorage if available
-const _savedTypes = (() => { try { return JSON.parse(localStorage.getItem('skinscan_skin_types') || '[]'); } catch(e) { return []; } })();
-const selectedTypes = normalizeSelectedSkinTypes(_savedTypes);
-try { localStorage.setItem('skinscan_skin_types', JSON.stringify([...selectedTypes])); } catch(_) {}
+let skinProfile = readSkinProfile();
+function persistSkinProfile() {
+  try {
+    localStorage.setItem('skinscan_skin_profile', JSON.stringify(skinProfile));
+    const legacy = [skinProfile.primary, ...skinProfile.conditions];
+    localStorage.setItem('skinscan_skin_types', JSON.stringify(legacy));
+  } catch (_) {}
+}
+persistSkinProfile();
 let activeSource = 'both';
 let selectedProduct = null;
 let capturedPhotoBase64 = null;   // base64 image data from camera
@@ -827,10 +871,51 @@ function hashString(s) {
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h) + s.charCodeAt(i);
   return (h >>> 0).toString(16);
 }
-function profileModeFromTypes(skinTypes) {
-  if (!skinTypes.length) return 'none';
-  const targeted = skinTypes.some(t => CONDITION_SKIN_TYPES.has(t) || t === 'dry');
-  return targeted ? 'targeted' : 'normal';
+function profileModeFromProfile(profile) {
+  if (!profile || !profile.primary) return 'none';
+  if ((profile.conditions || []).length > 0) return 'targeted';
+  return profile.primary === 'normal' ? 'normal' : 'targeted';
+}
+function profileToSkinTypes(profile) {
+  const out = [];
+  if (profile?.primary) out.push(profile.primary);
+  if (Array.isArray(profile?.conditions)) out.push(...profile.conditions);
+  return out;
+}
+function primaryLabel(value) {
+  const map = { normal: 'Normal', dry: 'Dry', oily: 'Oily', combination: 'Combination' };
+  return map[value] || value;
+}
+function conditionLabel(value) {
+  const map = { 'acne-prone': 'Acne-prone', sensitive: 'Sensitive / Reactive' };
+  return map[value] || value;
+}
+function applySkinChipUI() {
+  document.querySelectorAll('#skinChipsPrimary .chip').forEach(chip => {
+    chip.classList.toggle('active', chip.dataset.type === skinProfile.primary);
+  });
+  document.querySelectorAll('#skinChipsConditions .chip').forEach(chip => {
+    const t = chip.dataset.type;
+    const active = skinProfile.conditions.includes(t);
+    chip.classList.toggle('active', active);
+  });
+}
+function setPrimarySkinType(nextPrimary) {
+  skinProfile.primary = PRIMARY_SKIN_TYPES.has(nextPrimary) ? nextPrimary : 'normal';
+  if (skinProfile.primary === 'normal' && skinProfile.conditions.length) {
+    skinProfile.conditions = [];
+  }
+}
+function toggleConditionSkinType(condition) {
+  if (!CONDITION_SKIN_TYPES.has(condition)) return;
+  const has = skinProfile.conditions.includes(condition);
+  if (has) {
+    skinProfile.conditions = skinProfile.conditions.filter(c => c !== condition);
+  } else {
+    // "Normal" cannot coexist with condition flags.
+    if (skinProfile.primary === 'normal') skinProfile.primary = 'combination';
+    skinProfile.conditions = [...new Set([...skinProfile.conditions, condition])];
+  }
 }
 function setSearchState(nextState, options = {}) {
   searchState = nextState;
@@ -864,7 +949,7 @@ function scheduleAutoReanalysis() {
     document.getElementById('results').innerHTML = '';
     document.getElementById('loading').classList.add('show');
     setLoading('Re-analyzing...', 'Applying updated skin profile');
-    trackEvent('analysis_rerun_auto', { profileMode: profileModeFromTypes([...selectedTypes]) });
+    trackEvent('analysis_rerun_auto', { profileMode: profileModeFromProfile(skinProfile) });
     runAnalysis(productName, brand, ingredientsText, source, resultImage, lastAnalysisData?.resultCategory || '');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, 320);
@@ -873,35 +958,38 @@ function scheduleAutoReanalysis() {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CHIPS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-document.querySelectorAll('.chip').forEach(c => {
-  // Restore active state from saved prefs
-  if (selectedTypes.has(c.dataset.type)) c.classList.add('active');
+document.querySelectorAll('#skinChipsPrimary .chip').forEach(c => {
   c.addEventListener('click', () => {
-    const t = c.dataset.type;
-    if (PRIMARY_SKIN_TYPES.has(t)) {
-      if (t === 'dry') {
-        if (selectedTypes.has('dry')) selectedTypes.delete('dry');
-        else selectedTypes.add('dry');
-        selectedTypes.delete('normal');
-      } else if (t === 'normal') {
-        if (selectedTypes.has('normal')) selectedTypes.delete('normal');
-        else selectedTypes.add('normal');
-        if (selectedTypes.has('normal')) selectedTypes.delete('dry');
-      }
-    } else if (CONDITION_SKIN_TYPES.has(t)) {
-      selectedTypes.has(t) ? selectedTypes.delete(t) : selectedTypes.add(t);
-    } else {
-      selectedTypes.has(t) ? selectedTypes.delete(t) : selectedTypes.add(t);
-    }
-    document.querySelectorAll('.chip').forEach(chip => {
-      const key = chip.dataset.type;
-      chip.classList.toggle('active', selectedTypes.has(key));
+    setPrimarySkinType(c.dataset.type);
+    applySkinChipUI();
+    persistSkinProfile();
+    trackEvent('skin_profile_changed', {
+      primary: skinProfile.primary,
+      conditions: [...skinProfile.conditions],
+      profileMode: profileModeFromProfile(skinProfile)
     });
-    try { localStorage.setItem('skinscan_skin_types', JSON.stringify([...selectedTypes])); } catch(e) {}
-    trackEvent('skin_profile_changed', { selected: [...selectedTypes], profileMode: profileModeFromTypes([...selectedTypes]) });
     scheduleAutoReanalysis();
   });
 });
+document.querySelectorAll('#skinChipsConditions .chip').forEach(c => {
+  c.addEventListener('click', () => {
+    toggleConditionSkinType(c.dataset.type);
+    applySkinChipUI();
+    persistSkinProfile();
+    const skinHintEl = document.getElementById('skinHint');
+    if (skinHintEl && skinProfile.primary === 'normal' && skinProfile.conditions.length === 0) {
+      skinHintEl.style.display = 'block';
+      setTimeout(() => { skinHintEl.style.display = 'none'; }, 2200);
+    }
+    trackEvent('skin_profile_changed', {
+      primary: skinProfile.primary,
+      conditions: [...skinProfile.conditions],
+      profileMode: profileModeFromProfile(skinProfile)
+    });
+    scheduleAutoReanalysis();
+  });
+});
+applySkinChipUI();
 
 // Unified source mode: internal resolver decides source order and fallback.
 function setSource() {}
@@ -2320,7 +2408,9 @@ async function getChemistNote(productName, ingredients, verdict, skinTypes, aiFl
     'acne-prone': 'Acne-prone',
     sensitive: 'Sensitive / Reactive',
     dry: 'Dry',
-    normal: 'Normal'
+    normal: 'Normal',
+    oily: 'Oily',
+    combination: 'Combination'
   };
   const acneCount = (aiFlags?.acne || []).length;
   const sensitiveCount = (aiFlags?.sensitive || []).length;
@@ -2389,13 +2479,8 @@ async function doScan() {
     return;
   }
 
-  // Nudge if no skin type selected (don't block — but show hint briefly)
   const skinHintEl = document.getElementById('skinHint');
-  if (selectedTypes.size === 0) {
-    if (skinHintEl) { skinHintEl.style.display = 'block'; setTimeout(() => skinHintEl.style.display = 'none', 4000); }
-  } else {
-    if (skinHintEl) skinHintEl.style.display = 'none';
-  }
+  if (skinHintEl) skinHintEl.style.display = 'none';
 
   if (!inputVal) { productInput.style.borderColor='var(--bad)'; setTimeout(()=>productInput.style.borderColor='',900); productInput.focus(); return; }
 
@@ -2651,8 +2736,8 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
     const ingredients = parseIngredients(ingredientsText);
     if (!ingredients.length) { showNotFound(productName); return; }
 
-    const skinTypes = [...selectedTypes];
-    const profileMode = profileModeFromTypes(skinTypes);
+    const skinTypes = profileToSkinTypes(skinProfile);
+    const profileMode = profileModeFromProfile(skinProfile);
     const noSkinWarning = profileMode === 'none';
 
     // ── DB lookup — instant, no API call ──
@@ -2664,7 +2749,7 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
       const resolved = resolveIngredient(u);
       return !resolved?.data;
     });
-    const cats = buildCats(skinTypes, profileMode, aiFlags);
+    const cats = buildCats(skinTypes, profileMode, aiFlags, skinProfile);
     const unknownCount = unknownIngredients.length;
     const overall = cats.length ? overallScore(cats, unknownCount, ingredients.length) : 5;
     const verdict = verdictFromScore(overall);
@@ -2673,7 +2758,7 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
     logUnknownIngredients(unknownIngredients, source);
     trackEvent('ingredient_match_type_count', aiFlags._matchTypeCounts || {});
     const { label: confLabel, pct: confPct } = coverageConfidence(ingredients.length, unknownCount);
-    renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes, noSkinWarning, profileMode, dataSource: 'db', unknownIngredients, aiFlags, confLabel, confPct, resultImage, resultCategory });
+    renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes, noSkinWarning, profileMode, dataSource: 'db', unknownIngredients, aiFlags, confLabel, confPct, resultImage, resultCategory, skinProfile });
 
     // Chemist's note — local deterministic summary
     getChemistNote(productName, ingredients, verdict, skinTypes, aiFlags).then(text => {
@@ -2705,29 +2790,37 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
 //   acne=1: 0 (informational only — Fulton 1 is clinically negligible)
 //   occlusive/wax (acne=0): flagged in list, no burden contribution
 
-function acneSafetyScore(flagged) {
+function acneSafetyScore(flagged, options = {}) {
   if (!flagged.length) return 5;
+  const isAcneProne = !!options.acneProne;
   let burden = 0;
+  let moderateOrHigher = 0;
+  let highRiskEarly = 0;
   for (const f of flagged) {
     const a = f.acneVal || 0;  // raw Fulton value attached at flag-time
     const pos = Number.isFinite(f.positionFrac) ? f.positionFrac : 1;
     const positionWeight = pos <= 0.25 ? 1.0 : pos <= 0.5 ? 0.7 : 0.45;
-    // Comedogenicity tables are legacy/ingredient-only signals; treat as weak
-    // unless signal is high and likely present at meaningful concentration.
-    if (a >= 5)      burden += 1.0 * positionWeight;
-    else if (a === 4) burden += 0.7 * positionWeight;
-    else if (a === 3) burden += 0.4 * positionWeight;
-    else if (a === 2) burden += 0.25 * positionWeight;
+    if (a >= 5)      burden += (isAcneProne ? 1.35 : 1.0) * positionWeight;
+    else if (a === 4) burden += (isAcneProne ? 1.0 : 0.7) * positionWeight;
+    else if (a === 3) burden += (isAcneProne ? 0.65 : 0.4) * positionWeight;
+    else if (a === 2) burden += (isAcneProne ? 0.4 : 0.25) * positionWeight;
     // acne=1: shown in list as informational, no burden (Fulton 1 = clinically negligible)
     // occlusive/wax acne=0: no burden, flagged via separate branch in claudeIngredientCheck
+    if (a >= 2) moderateOrHigher += 1;
+    if (a >= 4 && pos <= 0.33) highRiskEarly += 1;
   }
-  // Multi-ingredient moderate burden should not remain "perfect".
-  if (flagged.length >= 4) burden += 0.2;
-  if (burden < 0.3) return 5;
-  if (burden < 0.8) return 4;
-  if (burden < 1.5) return 3;
-  if (burden < 2.2) return 2;
-  return 1;
+  if (flagged.length >= 4) burden += isAcneProne ? 0.3 : 0.2;
+  let score = 1;
+  if (burden < 0.3) score = 5;
+  else if (burden < 0.8) score = 4;
+  else if (burden < 1.5) score = 3;
+  else if (burden < 2.2) score = 2;
+  // Acne-prone guardrails: do not show a perfect score with meaningful comedogenic signal.
+  if (isAcneProne) {
+    if (moderateOrHigher >= 2) score = Math.min(score, 4);
+    if (highRiskEarly >= 1 || moderateOrHigher >= 3) score = Math.min(score, 3);
+  }
+  return score;
 }
 
 function genericSafetyScore(flagged) {
@@ -2743,25 +2836,29 @@ function genericSafetyScore(flagged) {
   return 1;
 }
 
-function buildCats(skinTypes, profileMode, aiFlags) {
+function buildCats(skinTypes, profileMode, aiFlags, skinProfileInput) {
   const get = (key) => Array.isArray(aiFlags[key]) ? aiFlags[key] : [];
   const cats = [];
-  const targetedSelected = skinTypes.some(t => t === 'acne-prone' || t === 'sensitive' || t === 'dry');
-  const normalOnly = profileMode === 'normal' && !targetedSelected;
+  const skinProfile = skinProfileInput || { primary: 'normal', conditions: [] };
+  const isAcneProne = (skinProfile.conditions || []).includes('acne-prone');
+  const isSensitive = (skinProfile.conditions || []).includes('sensitive');
+  const primary = skinProfile.primary || 'normal';
+  const normalOnly = profileMode === 'normal' && primary === 'normal' && !isAcneProne && !isSensitive;
 
-  if (skinTypes.includes('acne-prone')) {
+  if (isAcneProne) {
     const f = get('acne');
     cats.push({ key:'acne', name:'Pore-clogging & heavy',
       desc: f.length === 0 ? 'No pore-clogging or occlusive ingredients found.' : null,
-      flagged: f, score: acneSafetyScore(f), weight: 1.2 });
-  } else if (normalOnly) {
+      flagged: f, score: acneSafetyScore(f, { acneProne: true }), weight: 1.45 });
+  } else if (normalOnly || primary === 'oily' || primary === 'combination') {
     const f = get('normalAcne');
+    const acneWeight = primary === 'oily' ? 1.0 : primary === 'combination' ? 0.9 : 0.7;
     cats.push({ key:'acne', name:'Balanced pore-clogging risk',
       desc: f.length === 0 ? 'No moderate/high comedogenic signals detected.' : null,
-      flagged: f, score: acneSafetyScore(f), weight: 0.7 });
+      flagged: f, score: acneSafetyScore(f), weight: acneWeight });
   }
 
-  if (skinTypes.includes('sensitive')) {
+  if (isSensitive) {
     const f = get('sensitive');
     cats.push({ key:'reactive', name:'Irritants & sensitisers',
       desc: f.length === 0 ? 'No known irritants or sensitisers detected.' : null,
@@ -2773,7 +2870,7 @@ function buildCats(skinTypes, profileMode, aiFlags) {
       flagged: f, score: genericSafetyScore(f), weight: 0.9 });
   }
 
-  if (skinTypes.includes('dry')) {
+  if (primary === 'dry') {
     const f = get('dry');
     cats.push({ key:'dry', name:'Drying / stripping',
       desc: f.length === 0 ? 'No harsh drying agents detected.' : null,
@@ -2825,11 +2922,12 @@ function showNotFound(name) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // RENDER
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes, noSkinWarning, profileMode, dataSource, unknownIngredients, confLabel, confPct, resultImage, resultCategory }) {
+function renderResults({ productName, brand, ingredients, cats, overall, verdict, source, skinTypes, noSkinWarning, profileMode, dataSource, unknownIngredients, confLabel, confPct, resultImage, resultCategory, skinProfile }) {
   document.getElementById('loading').classList.remove('show');
 
-  const skinLabels = { 'acne-prone':'Acne-prone','sensitive':'Sensitive / Reactive','dry':'Dry','normal':'Normal' };
+  const skinLabels = { 'acne-prone':'Acne-prone','sensitive':'Sensitive / Reactive','dry':'Dry','normal':'Normal','oily':'Oily','combination':'Combination' };
   const unknown = unknownIngredients || [];
+  const activeProfile = skinProfile || { primary: 'normal', conditions: [] };
 
   const _coverageCap = confLabel && confLabel !== 'High';
   const _capNote = _coverageCap
@@ -2947,6 +3045,13 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
       </div>`;
   }).join('');
 
+  const acneCat = cats.find(c => c.key === 'acne');
+  const acneProneCondition = Array.isArray(activeProfile.conditions) && activeProfile.conditions.includes('acne-prone');
+  const acneGuardrailHtml = (acneProneCondition && acneCat && acneCat.flagged.length > 0) ? `
+    <div style="background:#FDF3E3;border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px;color:#9A6500;line-height:1.5">
+      Acne-prone mode is strict: when meaningful pore-clogging signals are present, score is capped and cannot stay perfect.
+    </div>` : '';
+
   // Unknown ingredients section — plain list (no external links)
   const unknownHTML = unknown.length > 0 ? `
     <div class="cat-row" style="margin-top:6px">
@@ -3001,8 +3106,12 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
     </div>
 
     <div class="r-skin-row">
-      <span class="r-skin-label">For:</span>
-      ${skinTypes.length ? skinTypes.map(t=>`<span class="r-skin-pill">${skinLabels[t]||t}</span>`).join('') : '<span class="r-skin-pill">General</span>'}
+      <span class="r-skin-label">Primary:</span>
+      <span class="r-skin-pill">${escHtml(primaryLabel(activeProfile.primary || 'normal'))}</span>
+      <span class="r-skin-label" style="margin-left:8px">Conditions:</span>
+      ${(activeProfile.conditions || []).length
+        ? activeProfile.conditions.map(t=>`<span class="r-skin-pill">${escHtml(conditionLabel(t))}</span>`).join('')
+        : '<span class="r-skin-pill">None</span>'}
     </div>
 
     ${noSkinWarning ? `<div style="background:#FDF3E3;border-radius:10px;padding:12px 15px;margin-bottom:14px;font-size:12.5px;color:#9A6500;line-height:1.5">
@@ -3012,6 +3121,7 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
     ${profileMode === 'normal' ? `<div style="background:#F6E9DE;border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px;color:#8D471F;line-height:1.5">
       <strong>General profile analysis.</strong> Balanced thresholds are applied for normal skin.
     </div>` : ''}
+    ${acneGuardrailHtml}
     ${unknown.length > 0 && (unknown.length / Math.max(ingredients.length, 1)) > 0.2 ? `<div style="background:#FDF3E3;border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px;color:#9A6500;line-height:1.5">
       Some ingredients could not be fully analyzed.
     </div>` : ''}
@@ -3027,7 +3137,7 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
       <button class="new-scan" style="flex:1" onclick="reAnalyze()" title="Re-run with current skin type selection">↺ Re-run with skin settings</button>
     </div>
     <div style="font-size:10.5px;color:rgba(26,20,16,0.25);line-height:1.6;margin-top:14px;text-align:center;padding:0 4px">
-      2,200+ ingredient database (K/J/C-beauty expanded). Comedogenicity is treated as a low-certainty signal with concentration-aware weighting. EU allergens per Regulation 1223/2009.
+      2,200+ ingredient database (K/J/C-beauty expanded). EU allergens per Regulation 1223/2009.
       Unknown ingredients are shown above for mapping review. Not a substitute for dermatological advice.
     </div>
   `;

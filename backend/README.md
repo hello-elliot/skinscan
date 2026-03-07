@@ -65,6 +65,17 @@ CosIng import discovery:
 - place latest export in `backend/data/import/`
 - filename must include `cosing` and extension `.csv`, `.tsv`, or `.txt`
 
+## Logic Regression Checks
+
+Run after frontend scoring changes:
+
+```bash
+node backend/audit_acne_ratings.js
+node backend/regression_logic_checks.js
+```
+
+This validates acne-rating consistency and verifies skin-profile/acne guardrail rules are still present in the shipped HTML runtime.
+
 ## API
 
 ### `POST /resolver/products/fast`
