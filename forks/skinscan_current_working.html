@@ -2867,6 +2867,22 @@ function isPastedIngredientList(text) {
   const avgLen = tokens.reduce((s, t) => s + t.length, 0) / tokens.length;
   return avgLen < 32;  // INCI names average ~12 chars; product names much longer
 }
+function inputMatchesSelectedProduct(inputVal, product) {
+  if (!product) return false;
+  const typed = normalizeQuery(inputVal || '');
+  if (!typed) return true;
+  const name = normalizeQuery(product.name || '');
+  const brand = normalizeQuery(product.brand || '');
+  const combo = normalizeQuery([brand, name].filter(Boolean).join(' '));
+  if (!name && !combo) return false;
+  return (
+    typed === name ||
+    typed === combo ||
+    name.includes(typed) ||
+    combo.includes(typed) ||
+    typed.includes(name)
+  );
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MAIN SCAN
@@ -2875,6 +2891,9 @@ async function doScan() {
   const inputVal = productInput.value.trim();
   clearTimeout(searchTimeout);
   latestSuggestRequestId += 1;
+  if (selectedProduct && !inputMatchesSelectedProduct(inputVal, selectedProduct)) {
+    selectedProduct = null;
+  }
 
   // ── Path A: Photo mode ──
   if (capturedPhotoBase64) {
@@ -3629,6 +3648,14 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
 function resetScan() {
   closeSkinQuiz('reset');
   clearTimeout(autoReanalyzeTimer);
+  clearTimeout(searchTimeout);
+  latestSuggestRequestId += 1;
+  if (activeSuggestAbortController) {
+    try { activeSuggestAbortController.abort(); } catch (_) {}
+    activeSuggestAbortController = null;
+  }
+  hideSuggestions();
+  setSearchState('idle');
   document.getElementById('results').classList.remove('show');
   document.getElementById('results').innerHTML = '';
   document.getElementById('inputSection').style.display = '';
