@@ -795,6 +795,12 @@ function scoreIngredientCandidate(text) {
   const alphaLike = tokens.filter(t => /[a-z]/i.test(t)).length;
   const alphaRatio = alphaLike / tokens.length;
   if (alphaRatio < 0.8) return { valid: false, confidence: 0.25, reason: 'parser_rejected' };
+  const badPhrase = /(hydrating|moisture|radiant|complexion|formula|texture|feeling|feels|perfect for|all skin types|boosted with|provides a burst|environmental stressors|sulfate[- ]free|paraben[- ]free|gluten[- ]free|soy[- ]free|phthalate[- ]free|vegan)/i;
+  const badTokenRatio = tokens.filter(t => badPhrase.test(t) || t.split(/\s+/).length > 9).length / tokens.length;
+  if (badTokenRatio > 0.25) return { valid: false, confidence: 0.2, reason: 'parser_rejected' };
+  const cuePattern = /\b(aqua|water|acid|extract|oil|glycol|alcohol|sodium|potassium|phosphate|chloride|hydroxide|tocopherol|niacinamide|ceramide|peg-|poly-|ethylhexyl|butyl|acrylate|carbomer|glutamate)\b/i;
+  const cueRatio = tokens.filter(t => cuePattern.test(t)).length / tokens.length;
+  if (cueRatio < 0.35) return { valid: false, confidence: 0.25, reason: 'parser_rejected' };
   const longTokenRatio = tokens.filter(t => t.length > 2 && t.length < 80).length / tokens.length;
   const confidence = Number(Math.min(0.99, (alphaRatio * 0.55) + (longTokenRatio * 0.35) + Math.min(tokens.length / 80, 0.1)).toFixed(3));
   if (confidence < 0.6) return { valid: false, confidence, reason: 'validation_failed' };

@@ -2197,7 +2197,7 @@ async function triggerSuggest(query) {
   });
   if (requestId !== latestSuggestRequestId || productInput.value.trim() !== query.trim()) return;
   if (resolution.state === 'error') {
-    setSearchState('error', { query });
+    setSearchState('empty', { query });
     return;
   }
   if (resolution.state === 'resolved_high') {
@@ -2962,9 +2962,15 @@ async function doScan() {
     setLoading('Searching product…', 'Matching brand and product variants');
     const resolution = await resolveProduct(inputVal, { includeWebFallback: true, forSuggest: false });
     if (resolution.state === 'error') {
-      setSearchState('error', { query: inputVal });
+      setSearchState('empty', { query: inputVal });
       document.getElementById('loading').classList.remove('show');
       document.getElementById('inputSection').style.display = '';
+      showCandidateStatusMessage('No close match yet. Add product URL below for fast indexing.');
+      showAddProductCapture({
+        query: inputVal,
+        normalizedQuery: normalizeQuery(inputVal),
+        decisionReason: 'unknown_brand'
+      });
       return;
     }
     if (resolution.state === 'not_found') {
