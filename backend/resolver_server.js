@@ -798,6 +798,16 @@ function scoreIngredientCandidate(text) {
   const badPhrase = /(hydrating|moisture|radiant|complexion|formula|texture|feeling|feels|perfect for|all skin types|boosted with|provides a burst|environmental stressors|sulfate[- ]free|paraben[- ]free|gluten[- ]free|soy[- ]free|phthalate[- ]free|vegan)/i;
   const badTokenRatio = tokens.filter(t => badPhrase.test(t) || t.split(/\s+/).length > 9).length / tokens.length;
   if (badTokenRatio > 0.25) return { valid: false, confidence: 0.2, reason: 'parser_rejected' };
+  const nonIngredientLike = tokens.filter(t => {
+    const token = String(t || '').trim();
+    if (!token) return true;
+    if (/[.!?]/.test(token)) return true;
+    if (/\b(you|your|hello|goodbye|try|discover|clinically|visible|visibly|hours?|days?|lightweight|soft|smooth|supple|designed|made for|suitable)\b/i.test(token)) return true;
+    const words = token.split(/\s+/).filter(Boolean);
+    const ingredientLike = /^[a-z0-9\-\/\s().%+]+$/i.test(token) && words.length <= 8;
+    return !ingredientLike;
+  }).length / tokens.length;
+  if (nonIngredientLike > 0.3) return { valid: false, confidence: 0.2, reason: 'parser_rejected' };
   const cuePattern = /\b(aqua|water|acid|extract|oil|glycol|alcohol|sodium|potassium|phosphate|chloride|hydroxide|tocopherol|niacinamide|ceramide|peg-|poly-|ethylhexyl|butyl|acrylate|carbomer|glutamate)\b/i;
   const cueRatio = tokens.filter(t => cuePattern.test(t)).length / tokens.length;
   if (cueRatio < 0.35) return { valid: false, confidence: 0.25, reason: 'parser_rejected' };
@@ -808,7 +818,9 @@ function scoreIngredientCandidate(text) {
 }
 
 function productHasIngredients(product) {
-  return product && product.ingredients_status === 'available' && String(product.ingredients_text || '').trim().length > 20;
+  if (!product || product.ingredients_status !== 'available') return false;
+  const quality = scoreIngredientCandidate(String(product.ingredients_text || ''));
+  return !!quality.valid;
 }
 
 function inferResolutionState(productId, product) {
@@ -1980,7 +1992,7 @@ function extractJsonLdIngredients(text) {
       const parsed = JSON.parse(block);
       const nodes = Array.isArray(parsed) ? parsed : [parsed, ...(Array.isArray(parsed['@graph']) ? parsed['@graph'] : [])];
       for (const n of nodes) {
-        const ing = n?.ingredients || n?.activeIngredients || n?.description;
+        const ing = n?.ingredients || n?.activeIngredients;
         if (!ing) continue;
         const txt = Array.isArray(ing) ? ing.join(', ') : String(ing);
         const normalized = normalizeIngredientText(txt);
@@ -2329,6 +2341,19 @@ async function candidateFromSubmission(submission) {
             parsed.ingredients_last_verified_at = nowIso();
             parsed.ingredients_version_hash = hashText(ingredientsText);
             parsed.ingredients_confidence = Math.max(parsed.ingredients_confidence || 0, quality.confidence);
+          }
+        }
+        if (parsed.ingredients_status !== 'available' && query) {
+          const quick = await fetchImmediateIngredientsByQuery(query, 2400).catch(() => null);
+          if (quick?.ingredientsText) {
+            parsed.ingredients_status = 'available';
+            parsed.ingredients_text = normalizeIngredientText(quick.ingredientsText || '');
+            parsed.ingredients_source = quick.source || 'federated-web';
+            parsed.ingredients_last_verified_at = nowIso();
+            parsed.ingredients_version_hash = hashText(parsed.ingredients_text);
+            parsed.ingredients_confidence = Number(quick.confidence || 0.7);
+            if (!parsed.image_url && quick.imageUrl) parsed.image_url = quick.imageUrl;
+            if (!parsed.category && quick.category) parsed.category = quick.category;
           }
         }
         return { candidate: parsed, source: 'url', failureCode: '' };
