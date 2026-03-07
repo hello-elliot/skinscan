@@ -335,6 +335,134 @@
       "al": 0,
       "safe": true,
       "func": "emollient"
+    },
+    "BRASSICA CAMPESTRIS (RAPESEED) STEROLS": {
+      "acne": 1,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "emollient/skin conditioning"
+    },
+    "VANILLYL BUTYL ETHER": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": null,
+      "func": "warming agent"
+    },
+    "SODIUM PHOSPHATE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "buffering agent"
+    },
+    "DISODIUM PHOSPHATE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "buffering agent"
+    },
+    "TETRASODIUM GLUTAMATE DIACETATE": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "chelating agent"
+    },
+    "SODIUM HYDROXIDE": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "pH adjuster"
+    },
+    "ETHYLHEXYL METHOXYCINNAMATE": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": null,
+      "func": "UV filter"
+    },
+    "ETHYLHEXYL SALICYLATE": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "UV filter"
+    },
+    "OCTOCRYLENE": {
+      "acne": 0,
+      "irr": 1,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "UV filter"
+    },
+    "VITIS VINIFERA (GRAPE) SEED EXTRACT": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "antioxidant"
+    },
+    "CAMELLIA OLEIFERA (GREEN TEA) LEAF EXTRACT": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "antioxidant/soothing"
+    },
+    "PEUCEDANUM GRAVEOLENS (DILL) EXTRACT": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "antioxidant"
+    },
+    "SAMBUCUS NIGRA (BLACK ELDERBERRY) FRUIT EXTRACT": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "antioxidant"
+    },
+    "AVENA SATIVA (OAT) BRAN EXTRACT": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "soothing/skin conditioning"
+    },
+    "PUNICA GRANATUM (POMEGRANATE) EXTRACT": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "antioxidant"
+    },
+    "SODIUM CARBOMER": {
+      "acne": 0,
+      "irr": 0,
+      "dry": 0,
+      "al": 0,
+      "safe": true,
+      "func": "thickener"
     }
   },
   "aliases": {
@@ -394,7 +522,20 @@
     "GLYCERINE": "GLYCERIN",
     "BETULA ALBA JUICE (10000 PPM)": "BETULA ALBA JUICE",
     "BETULA ALBA JUICE": "BETULA ALBA JUICE",
-    "PENTAERYTHRITYL TETRAETHYLHEXANOATE": "PENTAERYTHRITYL TETRAETHYLHEXANOATE"
+    "PENTAERYTHRITYL TETRAETHYLHEXANOATE": "PENTAERYTHRITYL TETRAETHYLHEXANOATE",
+    "BRASSICA CAMPESTRIS STEROLS": "BRASSICA CAMPESTRIS (RAPESEED) STEROLS",
+    "RAPESEED STEROLS": "BRASSICA CAMPESTRIS (RAPESEED) STEROLS",
+    "ETHYLHEXYL METHOXYCINNAMATE (OCTINOXATE 5% SUNSCREEN)": "ETHYLHEXYL METHOXYCINNAMATE",
+    "OCTINOXATE": "ETHYLHEXYL METHOXYCINNAMATE",
+    "ETHYLHEXYL SALICYLATE (OCTISALATE 2% SUNSCREEN)": "ETHYLHEXYL SALICYLATE",
+    "OCTISALATE": "ETHYLHEXYL SALICYLATE",
+    "OCTOCRYLENE (2% SUNSCREEN)": "OCTOCRYLENE",
+    "SODIUM HYDROXIDE *CERTIFIED ORGANIC INGREDIENT / INGRÉDIENT CERTIFIÉ BIOLOGIQUE": "SODIUM HYDROXIDE",
+    "CAMELLIA OLEIFERA LEAF EXTRACT": "CAMELLIA OLEIFERA (GREEN TEA) LEAF EXTRACT",
+    "VITIS VINIFERA SEED EXTRACT": "VITIS VINIFERA (GRAPE) SEED EXTRACT",
+    "SAMBUCUS NIGRA FRUIT EXTRACT": "SAMBUCUS NIGRA (BLACK ELDERBERRY) FRUIT EXTRACT",
+    "AVENA SATIVA BRAN EXTRACT": "AVENA SATIVA (OAT) BRAN EXTRACT",
+    "PUNICA GRANATUM EXTRACT": "PUNICA GRANATUM (POMEGRANATE) EXTRACT"
   },
   "synonyms": {
     "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER": "MELALEUCA ALTERNIFOLIA TEA TREE LEAF WATER",
@@ -453,7 +594,20 @@
     "GLYCERINE": "GLYCERIN",
     "BETULA ALBA JUICE (10000 PPM)": "BETULA ALBA JUICE",
     "BETULA ALBA JUICE": "BETULA ALBA JUICE",
-    "PENTAERYTHRITYL TETRAETHYLHEXANOATE": "PENTAERYTHRITYL TETRAETHYLHEXANOATE"
+    "PENTAERYTHRITYL TETRAETHYLHEXANOATE": "PENTAERYTHRITYL TETRAETHYLHEXANOATE",
+    "BRASSICA CAMPESTRIS STEROLS": "BRASSICA CAMPESTRIS (RAPESEED) STEROLS",
+    "RAPESEED STEROLS": "BRASSICA CAMPESTRIS (RAPESEED) STEROLS",
+    "ETHYLHEXYL METHOXYCINNAMATE (OCTINOXATE 5% SUNSCREEN)": "ETHYLHEXYL METHOXYCINNAMATE",
+    "OCTINOXATE": "ETHYLHEXYL METHOXYCINNAMATE",
+    "ETHYLHEXYL SALICYLATE (OCTISALATE 2% SUNSCREEN)": "ETHYLHEXYL SALICYLATE",
+    "OCTISALATE": "ETHYLHEXYL SALICYLATE",
+    "OCTOCRYLENE (2% SUNSCREEN)": "OCTOCRYLENE",
+    "SODIUM HYDROXIDE *CERTIFIED ORGANIC INGREDIENT / INGRÉDIENT CERTIFIÉ BIOLOGIQUE": "SODIUM HYDROXIDE",
+    "CAMELLIA OLEIFERA LEAF EXTRACT": "CAMELLIA OLEIFERA (GREEN TEA) LEAF EXTRACT",
+    "VITIS VINIFERA SEED EXTRACT": "VITIS VINIFERA (GRAPE) SEED EXTRACT",
+    "SAMBUCUS NIGRA FRUIT EXTRACT": "SAMBUCUS NIGRA (BLACK ELDERBERRY) FRUIT EXTRACT",
+    "AVENA SATIVA BRAN EXTRACT": "AVENA SATIVA (OAT) BRAN EXTRACT",
+    "PUNICA GRANATUM EXTRACT": "PUNICA GRANATUM (POMEGRANATE) EXTRACT"
   },
   "familyRules": []
 }

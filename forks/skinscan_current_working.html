@@ -1471,6 +1471,10 @@ productInput.addEventListener('input', () => {
   selectedProduct = null;
   lastSuggestionMeta = null;
   clearTimeout(searchTimeout);
+  if (isLikelyProductUrl(val)) {
+    setSearchState('idle');
+    return;
+  }
   if (val.length >= 3 && !val.includes(',') && val.length < 80)
     searchTimeout = setTimeout(() => triggerSuggest(val), 400);
   else setSearchState('idle');
@@ -2730,15 +2734,35 @@ function isLikelyProductUrl(text) {
     return false;
   }
 }
+function deriveQueryFromUrl(rawUrl) {
+  try {
+    const u = new URL(String(rawUrl || '').trim());
+    const hostPart = (u.hostname || '').replace(/^www\./i, '').split('.')[0] || '';
+    const pathPart = (u.pathname || '')
+      .split('/')
+      .filter(Boolean)
+      .slice(-2)
+      .join(' ')
+      .replace(/\.[a-z0-9]{2,5}$/i, ' ');
+    const joined = `${hostPart} ${pathPart}`
+      .replace(/[-_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return joined || rawUrl;
+  } catch (_) {
+    return rawUrl;
+  }
+}
 async function analyzeFromProductUrl(productUrl) {
   const locale = navigator.language || 'en-US';
   const region = ((navigator.language || 'en-US').split('-')[1] || '').toUpperCase();
+  const queryText = deriveQueryFromUrl(productUrl);
   setLoading('Indexing product page…', 'Fetching product details from URL');
   const submit = await fetch(resolverUrl('/resolver/feedback/add-product'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      query: productUrl,
+      query: queryText,
       productUrl,
       locale,
       region
@@ -2764,7 +2788,7 @@ async function analyzeFromProductUrl(productUrl) {
   if (!finalStatus || finalStatus.state !== 'completed' || !finalStatus.productId) {
     throw new Error(finalStatus?.failureCode || finalStatus?.reason || 'url_ingest_failed');
   }
-  const product = await resolveIngestedProduct(productUrl, finalStatus.productId);
+  const product = await resolveIngestedProduct(queryText, finalStatus.productId);
   if (!product) throw new Error('url_resolve_failed');
   const enriched = await enrichCandidateIngredients(product);
   if (!enriched?.ingredientsText) throw new Error('url_ingredients_missing');
