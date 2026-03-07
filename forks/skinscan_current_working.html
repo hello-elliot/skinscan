@@ -2804,25 +2804,36 @@ function logUnknownIngredients(unknownIngredients, source) {
 }
 
 async function analyzeIngredientsWithBackend(ingredientsText, profile) {
-  try {
-    const res = await fetch(resolverUrl('/resolver/analyze-ingredients'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ingredientsText,
-        profile: {
-          primary: profile?.primary || 'normal',
-          conditions: Array.isArray(profile?.conditions) ? profile.conditions : []
-        }
-      })
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data?.ok) return null;
-    return data;
-  } catch (_) {
-    return null;
+  const payload = {
+    ingredientsText,
+    profile: {
+      primary: profile?.primary || 'normal',
+      conditions: Array.isArray(profile?.conditions) ? profile.conditions : []
+    }
+  };
+  const bases = resolverBaseUrls();
+  const timeoutMs = 4500;
+  for (const baseUrl of bases) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(resolverUrl('/resolver/analyze-ingredients', baseUrl), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (!data?.ok) continue;
+      return data;
+    } catch (_) {
+      // Try next resolver base.
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  return null;
 }
 
 function mapBackendCategoryToUi(cat) {
