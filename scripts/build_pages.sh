@@ -20,7 +20,12 @@ if [ -z "$RESOLVER_URL" ]; then
   RESOLVER_URL="https://skinscan-3bgp.onrender.com"
 fi
 
-INJECT_SCRIPT="<script>window.__SKINSCAN_RESOLVER_API_URL='${RESOLVER_URL}';</script>"
+PROXY_URL="${SKINSCAN_PROXY_URL:-}"
+if [ -z "$PROXY_URL" ]; then
+  PROXY_URL="${RESOLVER_URL%/}/resolver/ai-proxy"
+fi
+
+INJECT_SCRIPT="<script>window.__SKINSCAN_RESOLVER_API_URL='${RESOLVER_URL}';window.__SKINSCAN_PROXY_URL='${PROXY_URL}';</script>"
 OVERRIDES_JSON="$(node - "$OVERRIDES_PATH" "$CANONICAL_INDEX_PATH" <<'NODE'
 const fs = require('fs');
 const overridesPath = process.argv[2];

@@ -908,8 +908,8 @@ function dbLookup(name) {
 // PROXY CONFIG
 // Replace YOUR_WORKER_URL with your Cloudflare Worker URL after deploying.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const PROXY_URL = window.__SKINSCAN_PROXY_URL || 'https://skinscan-proxy.kelly-f.workers.dev';
 const RESOLVER_API_URL = window.__SKINSCAN_RESOLVER_API_URL || 'https://skinscan-3bgp.onrender.com';
+const PROXY_URL = window.__SKINSCAN_PROXY_URL || (String(RESOLVER_API_URL).replace(/\/+$/, '') + '/resolver/ai-proxy');
 const RESOLVER_API_FALLBACKS = [
   'https://skinscan-3bgp.onrender.com',
   'https://skinscan-1.onrender.com'
@@ -1461,9 +1461,12 @@ function openPhotoCapture() {
 async function initPhotoServiceHealth() {
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3000);
-    await fetch(apiUrl().replace('/v1/messages', ''), { method: 'GET', mode: 'no-cors', signal: controller.signal });
+    const timer = setTimeout(() => controller.abort(), 3200);
+    const res = await fetch(apiUrl().replace('/v1/messages', ''), { method: 'GET', signal: controller.signal });
     clearTimeout(timer);
+    if (!res.ok) throw new Error('photo_service_unhealthy');
+    const payload = await res.json().catch(() => ({}));
+    if (payload && payload.ok === false) throw new Error('photo_service_unhealthy');
     photoScanServiceAvailable = true;
   } catch (_) {
     photoScanServiceAvailable = false;

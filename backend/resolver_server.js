@@ -3201,6 +3201,76 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+async function probeAiProxyHealth() {
+  const base = String(AI_PROXY_URL || '').replace(/\/+$/, '');
+  if (!base) return { ok: false, reason: 'missing_ai_proxy_url' };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2500);
+  try {
+    const res = await fetch(base, { method: 'GET', signal: controller.signal });
+    clearTimeout(timer);
+    return { ok: res.ok, status: res.status };
+  } catch (err) {
+    clearTimeout(timer);
+    return { ok: false, reason: String(err?.name || err?.message || 'unreachable') };
+  }
+}
+
+async function handleAiProxyBase(_req, res) {
+  const health = await probeAiProxyHealth();
+  sendJson(res, health.ok ? 200 : 503, {
+    ok: health.ok,
+    upstream: AI_PROXY_URL,
+    status: health.status || 0,
+    reason: health.reason || ''
+  });
+}
+
+async function handleAiProxyMessages(req, res) {
+  let body;
+  try {
+    body = await readBody(req);
+  } catch (_) {
+    sendJson(res, 400, { error: 'invalid_json' });
+    return;
+  }
+  const upstream = `${String(AI_PROXY_URL || '').replace(/\/+$/, '')}/v1/messages`;
+  if (!String(AI_PROXY_URL || '').trim()) {
+    sendJson(res, 503, { error: 'ai_proxy_not_configured' });
+    return;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const upstreamRes = await fetch(upstream, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'web-search-2025-03-05'
+      },
+      body: JSON.stringify(body || {})
+    });
+    const text = await upstreamRes.text();
+    let json;
+    try {
+      json = text ? JSON.parse(text) : {};
+    } catch (_) {
+      json = { error: { message: 'invalid_upstream_response' }, raw: String(text || '').slice(0, 1000) };
+    }
+    sendJson(res, upstreamRes.status, json);
+  } catch (err) {
+    const isTimeout = String(err?.name || '').toLowerCase() === 'aborterror';
+    sendJson(res, isTimeout ? 504 : 503, {
+      error: isTimeout ? 'ai_proxy_timeout' : 'ai_proxy_unreachable',
+      message: String(err?.message || err || 'proxy_error')
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function handleResolveProducts(req, res) {
   const body = await readBody(req);
   const query = String(body.query || '').trim();
@@ -3920,6 +3990,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && url.pathname === '/resolver/ai-proxy/v1/messages') {
+      await handleAiProxyMessages(req, res);
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/resolver/feedback/candidate-selection') {
       await handleCandidateSelectionFeedback(req, res);
       return;
@@ -3990,6 +4065,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'GET' && url.pathname === '/resolver/ai-proxy') {
+      await handleAiProxyBase(req, res);
+      return;
+    }
+
     if (req.method === 'GET' && url.pathname === '/healthz') {
       pruneSourceCache();
       sendJson(res, 200, { ok: true });
@@ -4009,6 +4089,8 @@ const server = http.createServer(async (req, res) => {
           '/resolver/products/fast',
           '/resolver/coverage-metrics',
           '/resolver/smoke-check',
+          '/resolver/ai-proxy',
+          '/resolver/ai-proxy/v1/messages',
           '/resolver/feedback/candidate-selection',
           '/resolver/feedback/add-product',
           '/resolver/ingestion-status/:jobId',

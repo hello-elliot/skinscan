@@ -28,6 +28,11 @@ Optional env:
 - `INGESTION_POLL_INTERVAL_MS` (default `30000`; background cadence for queued add-product ingestion jobs)
 - `FAST_SEARCH_BUDGET_MS` (default `1500`; timeout budget for `/resolver/products/fast`)
 
+Frontend build env:
+
+- `RESOLVER_API_URL` (static build inject for resolver base URL)
+- `SKINSCAN_PROXY_URL` (optional static build inject for client OCR proxy base; defaults to `${RESOLVER_API_URL}/resolver/ai-proxy`)
+
 ## Daily Enrichment Job
 
 ```bash
@@ -340,3 +345,11 @@ Checks live deploy contract shape:
 - `backend/data/ingredient_canonical_index.json` CosIng-backed canonical ingredient index
 - `backend/data/ingredient_ingestion_report.json` latest CosIng/PubChem ingestion summary
 - `backend/data/product_source_profiles.json` curated PDP sources for top products
+### `GET /resolver/ai-proxy`
+
+Health probe for AI proxy connectivity used by photo OCR.
+
+### `POST /resolver/ai-proxy/v1/messages`
+
+Backend passthrough endpoint for Claude message calls from frontend.
+Use this in static frontend builds to avoid direct client dependency on a separate proxy hostname.
