@@ -37,6 +37,93 @@
   .chip { padding: 7px 15px; border-radius: 50px; border: 1.5px solid rgba(26,20,16,0.18); font-size: 13px; cursor: pointer; background: transparent; color: var(--dark); transition: all 0.15s; -webkit-tap-highlight-color: transparent; }
   .chip:hover { border-color: var(--terra); color: var(--terra); }
   .chip.active { background: var(--terra); border-color: var(--terra); color: white; }
+  .skin-quiz-trigger {
+    display: inline-block;
+    margin: -2px 0 14px 2px;
+    border: none;
+    background: none;
+    padding: 0;
+    font-size: 11.5px;
+    color: rgba(26,20,16,0.42);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+  }
+  .skin-quiz-trigger:hover { color: var(--terra); }
+  .skin-quiz-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(26,20,16,0.36);
+    z-index: 2000;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 12px;
+  }
+  .skin-quiz-overlay.show { display: flex; }
+  .skin-quiz-sheet {
+    width: min(500px, 100%);
+    background: #fff;
+    border-radius: 14px;
+    border: 1.5px solid rgba(26,20,16,0.12);
+    box-shadow: 0 16px 40px rgba(26,20,16,0.25);
+    overflow: hidden;
+  }
+  .skin-quiz-head {
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid rgba(26,20,16,0.08);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .skin-quiz-title { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; line-height: 1.2; }
+  .skin-quiz-sub { font-size: 11px; color: rgba(26,20,16,0.5); margin-top: 3px; line-height: 1.45; }
+  .skin-quiz-close {
+    border: none;
+    background: rgba(26,20,16,0.06);
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 28px;
+    color: rgba(26,20,16,0.7);
+  }
+  .skin-quiz-body { padding: 14px 16px 16px; }
+  .skin-quiz-progress { font-size: 11px; color: rgba(26,20,16,0.4); margin-bottom: 8px; }
+  .skin-quiz-q { font-size: 14px; color: var(--dark); margin-bottom: 9px; line-height: 1.45; }
+  .skin-quiz-option {
+    width: 100%;
+    text-align: left;
+    border: 1.5px solid rgba(26,20,16,0.15);
+    background: #fff;
+    border-radius: 10px;
+    padding: 10px 11px;
+    margin-bottom: 7px;
+    cursor: pointer;
+    font-size: 12.5px;
+    color: rgba(26,20,16,0.88);
+    font-family: 'DM Sans', sans-serif;
+  }
+  .skin-quiz-option:hover { border-color: var(--terra); color: var(--terra); background: rgba(196,98,45,0.03); }
+  .skin-quiz-foot { display: flex; gap: 8px; margin-top: 10px; }
+  .skin-quiz-btn {
+    border: 1.5px solid rgba(26,20,16,0.2);
+    background: rgba(26,20,16,0.04);
+    color: rgba(26,20,16,0.82);
+    border-radius: 10px;
+    padding: 9px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+  }
+  .skin-quiz-btn.primary {
+    border-color: rgba(196,98,45,0.45);
+    background: rgba(196,98,45,0.1);
+    color: #7A3C1A;
+  }
 
   /* ── SOURCE TABS ── */
   .source-tabs { display: flex; gap: 5px; margin-bottom: 11px; }
@@ -251,6 +338,8 @@
     .icon-btn { width: 38px; height: 38px; }
     textarea { padding: 13px 94px 13px 14px; font-size: 15px; }
     .chip { padding: 8px 16px; font-size: 13.5px; }
+    .skin-quiz-overlay { padding: 8px; }
+    .skin-quiz-sheet { border-radius: 12px; }
   }
   /* Prevent iOS bounce / overscroll on the app shell */
   html { height: 100%; overflow-y: scroll; -webkit-overflow-scrolling: touch; }
@@ -305,6 +394,7 @@
   <div id="skinHint" style="font-size:11px;color:rgba(196,98,45,0.65);margin:-4px 0 6px 2px;display:none">
     ↑ Normal cannot be combined with acne-prone or sensitive/reactive.
   </div>
+  <button class="skin-quiz-trigger" id="skinQuizTrigger" type="button">Not sure? Find my skin profile</button>
 
   <div id="inputSection">
     <div class="section-label">What product?</div>
@@ -360,6 +450,19 @@
 
   <div class="attribution">Data from public cosmetic sources</div>
 </main>
+
+<div class="skin-quiz-overlay" id="skinQuizOverlay" aria-hidden="true">
+  <div class="skin-quiz-sheet" id="skinQuizSheet" role="dialog" aria-modal="true" aria-labelledby="skinQuizTitle">
+    <div class="skin-quiz-head">
+      <div>
+        <div class="skin-quiz-title" id="skinQuizTitle">Quick skin profile quiz</div>
+        <div class="skin-quiz-sub">Guided screener based on common dermatology care patterns. You can edit manually anytime.</div>
+      </div>
+      <button class="skin-quiz-close" type="button" id="skinQuizClose" aria-label="Close">×</button>
+    </div>
+    <div class="skin-quiz-body" id="skinQuizBody"></div>
+  </div>
+</div>
 
 <script>
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -922,6 +1025,188 @@ function toggleConditionSkinType(condition) {
     skinProfile.conditions = [...new Set([...skinProfile.conditions, condition])];
   }
 }
+const skinQuizOverlayEl = document.getElementById('skinQuizOverlay');
+const skinQuizSheetEl = document.getElementById('skinQuizSheet');
+const skinQuizBodyEl = document.getElementById('skinQuizBody');
+const skinQuizTriggerEl = document.getElementById('skinQuizTrigger');
+const skinQuizCloseEl = document.getElementById('skinQuizClose');
+const SKIN_QUIZ_QUESTIONS = [
+  {
+    id: 'after_cleanse',
+    q: 'About 45 minutes after cleansing (no moisturizer), what feels most true?',
+    options: [
+      { label: 'Tight or flaky', score: { dry: 2 } },
+      { label: 'Comfortable, balanced', score: { } },
+      { label: 'Shiny in multiple areas', score: { oily: 2 } }
+    ]
+  },
+  {
+    id: 'midday_shine',
+    q: 'By midday, where do you usually get shine?',
+    options: [
+      { label: 'Rarely shiny', score: { dry: 1 } },
+      { label: 'Mainly T-zone', score: { oily: 2, dry: 1 } },
+      { label: 'Most of the face', score: { oily: 3 } }
+    ]
+  },
+  {
+    id: 'breakouts',
+    q: 'How often do you get clogged pores or breakouts?',
+    options: [
+      { label: 'Rarely', score: { } },
+      { label: 'Sometimes', score: { acne: 2 } },
+      { label: 'Often', score: { acne: 3 } }
+    ]
+  },
+  {
+    id: 'reactivity',
+    q: 'How often do products cause stinging, redness, or burning?',
+    options: [
+      { label: 'Rarely', score: { } },
+      { label: 'Sometimes', score: { sensitive: 2 } },
+      { label: 'Often', score: { sensitive: 3 } }
+    ]
+  },
+  {
+    id: 'dry_patches',
+    q: 'Do you get rough/dry patches, especially after weather changes?',
+    options: [
+      { label: 'No', score: { } },
+      { label: 'Sometimes', score: { dry: 2 } },
+      { label: 'Often', score: { dry: 3 } }
+    ]
+  },
+  {
+    id: 'makeup_wear',
+    q: 'How does makeup/sunscreen usually sit after a few hours?',
+    options: [
+      { label: 'Can look patchy or cling to dry areas', score: { dry: 2 } },
+      { label: 'Usually stable', score: { } },
+      { label: 'Slides or gets very shiny', score: { oily: 2 } }
+    ]
+  }
+];
+let skinQuizState = { open: false, step: 0, answers: [], result: null };
+function openSkinQuiz() {
+  skinQuizState = { open: true, step: 0, answers: [], result: null };
+  skinQuizOverlayEl.classList.add('show');
+  skinQuizOverlayEl.setAttribute('aria-hidden', 'false');
+  renderSkinQuiz();
+  trackEvent('skin_quiz_started', {});
+}
+function closeSkinQuiz(reason = 'dismissed') {
+  if (!skinQuizState.open) return;
+  skinQuizState.open = false;
+  skinQuizOverlayEl.classList.remove('show');
+  skinQuizOverlayEl.setAttribute('aria-hidden', 'true');
+  trackEvent('skin_quiz_closed', { reason });
+}
+function scoreSkinQuizAnswers(answers) {
+  const totals = { dry: 0, oily: 0, acne: 0, sensitive: 0 };
+  answers.forEach(a => {
+    const s = (a && a.score) || {};
+    totals.dry += Number(s.dry || 0);
+    totals.oily += Number(s.oily || 0);
+    totals.acne += Number(s.acne || 0);
+    totals.sensitive += Number(s.sensitive || 0);
+  });
+  let primary = 'normal';
+  if (totals.oily >= 4 && totals.dry <= 2) primary = 'oily';
+  else if (totals.dry >= 4 && totals.oily <= 2) primary = 'dry';
+  else if (totals.oily >= 3 && totals.dry >= 3) primary = 'combination';
+  else if ((totals.oily - totals.dry) >= 2) primary = 'oily';
+  else if ((totals.dry - totals.oily) >= 2) primary = 'dry';
+  const conditions = [];
+  if (totals.acne >= 3) conditions.push('acne-prone');
+  if (totals.sensitive >= 3) conditions.push('sensitive');
+  if (primary === 'normal' && conditions.length) primary = 'combination';
+  const signalSpan = Math.abs(totals.oily - totals.dry);
+  let confidence = 'medium';
+  if ((primary !== 'normal' && signalSpan >= 2) || conditions.length >= 2) confidence = 'high';
+  else if (primary === 'normal' && conditions.length === 0 && totals.dry + totals.oily <= 2) confidence = 'low';
+  return { primary, conditions, confidence, totals };
+}
+function applySkinQuizResult() {
+  if (!skinQuizState.result) return;
+  skinProfile = {
+    primary: skinQuizState.result.primary,
+    conditions: [...skinQuizState.result.conditions]
+  };
+  persistSkinProfile();
+  applySkinChipUI();
+  trackEvent('skin_quiz_applied', {
+    primary: skinProfile.primary,
+    conditions: [...skinProfile.conditions],
+    confidence: skinQuizState.result.confidence
+  });
+  closeSkinQuiz('applied');
+  scheduleAutoReanalysis();
+}
+function renderSkinQuiz() {
+  if (!skinQuizState.open) return;
+  if (skinQuizState.result) {
+    const r = skinQuizState.result;
+    skinQuizBodyEl.innerHTML = `
+      <div class="skin-quiz-progress">Result</div>
+      <div class="skin-quiz-q" style="margin-bottom:10px">
+        Suggested profile: <strong>${escHtml(primaryLabel(r.primary))}</strong>
+      </div>
+      <div style="font-size:12px;color:rgba(26,20,16,0.68);line-height:1.55">
+        Conditions: ${(r.conditions.length ? r.conditions.map(conditionLabel).map(escHtml).join(', ') : 'None')}<br>
+        Confidence: ${escHtml(r.confidence)}
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:rgba(26,20,16,0.45);line-height:1.45">
+        This is a quick screener, not a medical diagnosis.
+      </div>
+      <div class="skin-quiz-foot">
+        <button type="button" class="skin-quiz-btn primary" id="skinQuizApplyBtn">Use this profile</button>
+        <button type="button" class="skin-quiz-btn" id="skinQuizRetakeBtn">Retake</button>
+      </div>`;
+    document.getElementById('skinQuizApplyBtn').addEventListener('click', applySkinQuizResult);
+    document.getElementById('skinQuizRetakeBtn').addEventListener('click', () => {
+      skinQuizState = { open: true, step: 0, answers: [], result: null };
+      trackEvent('skin_quiz_retake', {});
+      renderSkinQuiz();
+    });
+    return;
+  }
+  const q = SKIN_QUIZ_QUESTIONS[skinQuizState.step];
+  const progress = `Question ${skinQuizState.step + 1} of ${SKIN_QUIZ_QUESTIONS.length}`;
+  skinQuizBodyEl.innerHTML = `
+    <div class="skin-quiz-progress">${progress}</div>
+    <div class="skin-quiz-q">${escHtml(q.q)}</div>
+    ${q.options.map((opt, i) => `<button type="button" class="skin-quiz-option" data-opt="${i}">${escHtml(opt.label)}</button>`).join('')}
+    <div class="skin-quiz-foot">
+      ${skinQuizState.step > 0 ? '<button type="button" class="skin-quiz-btn" id="skinQuizBackBtn">Back</button>' : '<span></span>'}
+      <button type="button" class="skin-quiz-btn" id="skinQuizSkipBtn">Skip</button>
+    </div>`;
+  skinQuizBodyEl.querySelectorAll('.skin-quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.opt);
+      skinQuizState.answers[skinQuizState.step] = q.options[idx];
+      if (skinQuizState.step < SKIN_QUIZ_QUESTIONS.length - 1) {
+        skinQuizState.step += 1;
+        renderSkinQuiz();
+      } else {
+        skinQuizState.result = scoreSkinQuizAnswers(skinQuizState.answers);
+        trackEvent('skin_quiz_completed', {
+          primary: skinQuizState.result.primary,
+          conditions: skinQuizState.result.conditions,
+          confidence: skinQuizState.result.confidence
+        });
+        renderSkinQuiz();
+      }
+    });
+  });
+  const back = document.getElementById('skinQuizBackBtn');
+  if (back) {
+    back.addEventListener('click', () => {
+      skinQuizState.step = Math.max(0, skinQuizState.step - 1);
+      renderSkinQuiz();
+    });
+  }
+  document.getElementById('skinQuizSkipBtn').addEventListener('click', () => closeSkinQuiz('skipped'));
+}
 function setSearchState(nextState, options = {}) {
   searchState = nextState;
   trackEvent('search_state_changed', { state: nextState, query: options.query || productInput.value.trim() });
@@ -995,6 +1280,19 @@ document.querySelectorAll('#skinChipsConditions .chip').forEach(c => {
   });
 });
 applySkinChipUI();
+if (skinQuizTriggerEl) skinQuizTriggerEl.addEventListener('click', openSkinQuiz);
+if (skinQuizCloseEl) skinQuizCloseEl.addEventListener('click', () => closeSkinQuiz('close_button'));
+if (skinQuizOverlayEl) {
+  skinQuizOverlayEl.addEventListener('click', (e) => {
+    if (e.target === skinQuizOverlayEl) closeSkinQuiz('overlay_click');
+  });
+}
+if (skinQuizSheetEl) {
+  skinQuizSheetEl.addEventListener('click', (e) => e.stopPropagation());
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && skinQuizState.open) closeSkinQuiz('escape');
+});
 
 // Unified source mode: internal resolver decides source order and fallback.
 function setSource() {}
@@ -3161,6 +3459,7 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
 }
 
 function resetScan() {
+  closeSkinQuiz('reset');
   clearTimeout(autoReanalyzeTimer);
   document.getElementById('results').classList.remove('show');
   document.getElementById('results').innerHTML = '';
