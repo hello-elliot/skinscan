@@ -1721,7 +1721,13 @@ async function submitAddProduct() {
   }
 }
 function normalizeQuery(q) {
-  return (q || '').toLowerCase().replace(/[^\w\s-]/g, ' ').replace(/\s+/g, ' ').trim();
+  return (q || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 function wordOverlapScore(query, text) {
   const qWords = query.split(/\s+/).filter(Boolean);

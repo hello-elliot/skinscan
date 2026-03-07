@@ -366,6 +366,8 @@ function resolveIngredientKnowledge(token, knowledge, canonicalLookup = null) {
 
 function normalizeText(s) {
   return String(s || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^\w\s-]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -987,13 +989,22 @@ function scoreProduct(query, product, brandHint) {
   const sourcePriority = Math.min((Number(product.source_priority || 50) / 100) * 0.06, 0.06);
   const brandMatched = productMatchesBrandHint(product, brandHint);
   const brandGateBoost = brandHint ? (brandMatched ? 0.14 : -0.45) : 0;
-  const score = (best * 0.62) + (brand * 0.14) + (line * 0.08) + availBoost + recency + popularity + sourcePriority + brandGateBoost;
+  const queryTokens = tokenize(query).filter(t => t.length > 2 && !GENERIC_PRODUCT_TOKENS.has(t));
+  const brandTokens = tokenize(product.brand_canonical || '');
+  const informativeQueryTokens = queryTokens.filter(t => !brandTokens.includes(t));
+  const nameTokens = tokenize(product.name_canonical || '').filter(t => t.length > 2 && !GENERIC_PRODUCT_TOKENS.has(t));
+  const nameTokenSet = new Set(nameTokens);
+  const nameAnchorHits = informativeQueryTokens.filter(t => nameTokenSet.has(t)).length;
+  const hasNameAnchor = informativeQueryTokens.length === 0 ? true : nameAnchorHits > 0;
+  const noAnchorPenalty = (!hasNameAnchor && informativeQueryTokens.length > 0 && best < 0.9) ? -0.18 : 0;
+  const score = (best * 0.62) + (brand * 0.14) + (line * 0.08) + availBoost + recency + popularity + sourcePriority + brandGateBoost + noAnchorPenalty;
   return {
     score: Math.max(0, Math.min(1, score)),
     brandMatched,
     nameSimilarity: Number(best.toFixed(3)),
     brandSimilarity: Number(brand.toFixed(3)),
-    exactNameMatch
+    exactNameMatch,
+    hasNameAnchor
   };
 }
 
@@ -1018,6 +1029,7 @@ function toResolvedProduct(product, scoring, confidence = 'low') {
     nameSimilarity: Number(scoring.nameSimilarity || 0),
     brandSimilarity: Number(scoring.brandSimilarity || 0),
     exactNameMatch: !!scoring.exactNameMatch,
+    hasNameAnchor: scoring.hasNameAnchor !== false,
     negativeRuleBlocked: !!scoring.blockedByNegativeRule,
     scoreGap: 0,
     score: Number(scoring.score.toFixed(3))
@@ -1062,12 +1074,14 @@ function classify(ranked, options = {}) {
   const weakBrandSignal = !brandHintPresent && top.brandSimilarity < 0.45;
   const strictLowBrandSignal = !brandHintPresent && top.brandSimilarity < 0.55;
   const ambiguousTop = second ? gap < 0.12 : false;
+  const weakNameAnchor = top.hasNameAnchor === false && top.nameSimilarity < 0.9;
   const highQuality = (
     top.score >= 0.86 &&
     top.nameSimilarity >= 0.8 &&
     gap >= 0.15 &&
     !topBrandMismatch &&
-    !weakBrandSignal
+    !weakBrandSignal &&
+    !weakNameAnchor
   );
   const exactHigh = highQuality && (top.exactNameMatch || top.nameSimilarity >= 0.92);
   const unknownBrandCandidates = rankedWithGaps
@@ -1087,6 +1101,7 @@ function classify(ranked, options = {}) {
     }
     return asCandidateList(unknownBrandCandidates, 'unknown_brand');
   }
+  if (weakNameAnchor) return asCandidateList(rankedWithGaps, 'ambiguous');
   if (topBrandMismatch) return asCandidateList(rankedWithGaps, 'brand_mismatch');
   if (ambiguousTop) return asCandidateList(rankedWithGaps, 'low_gap');
   if (second && top.ingredientsStatus !== 'available' && second.ingredientsStatus === 'available' && gap < 0.08) {
@@ -1110,7 +1125,7 @@ function classify(ranked, options = {}) {
     };
   }
 
-  if (top.score >= 0.67 && top.nameSimilarity >= 0.58 && !topBrandMismatch && (!strictBrandGateEnabled || top.brandSimilarity >= 0.45 || brandHintPresent)) {
+  if (top.score >= 0.67 && top.nameSimilarity >= 0.58 && !topBrandMismatch && top.hasNameAnchor !== false && (!strictBrandGateEnabled || top.brandSimilarity >= 0.45 || brandHintPresent)) {
     return {
       state: 'resolved_medium',
       decisionReason: 'ambiguous',
@@ -4020,7 +4035,15 @@ function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
   let unknownPenaltyAmount = 0;
   let unknownPenaltyApplied = false;
   let unknownPenaltyReason = 'none';
-  if (conf.cap !== null) overall = Math.min(overall, Math.max(conf.cap, overall - 1.0));
+  if (conf.cap !== null) {
+    const lowRiskWithoutSensitive =
+      !isSensitive &&
+      flagged.acne.length <= 1 &&
+      flagged.sensitive.length === 0 &&
+      flagged.dry.length === 0;
+    const adjustedCap = lowRiskWithoutSensitive ? Math.max(conf.cap, 3.8) : conf.cap;
+    overall = Math.min(overall, Math.max(adjustedCap, overall - 1.0));
+  }
   if (isAcneProne && flagged.acne.length > 0 && overall >= 5) overall = 4.9;
   if (isAcneProne && unknown.length > 0) {
     if (conf.pct >= 0.9) {
