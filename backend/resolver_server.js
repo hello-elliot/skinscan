@@ -3950,7 +3950,7 @@ function acneBandFloor(decisionBand) {
   return map[String(decisionBand || '')] ?? null;
 }
 
-function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
+function analyzeIngredientsForProfile(ingredientsText, profileInput = {}, internalOptions = {}) {
   const normalizedIngredients = normalizeIngredientText(ingredientsText || '');
   const tokens = ingredientTokens(normalizedIngredients);
   const profile = {
@@ -4046,6 +4046,9 @@ function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
   const totalWeight = categories.reduce((sum, c) => sum + c.weight, 0) || 1;
   let overall = categories.reduce((sum, c) => sum + (c.score * c.weight), 0) / totalWeight;
   const conf = confidenceFromCoverage(tokens.length, unknown.length);
+  const skipAcneMonotonicClamp = !!internalOptions.skipAcneMonotonicClamp;
+  let acneMonotonicClampApplied = false;
+  let acneMonotonicReferenceOverall = null;
   let unknownPenaltyAmount = 0;
   let unknownPenaltyApplied = false;
   let unknownPenaltyReason = 'none';
@@ -4092,6 +4095,22 @@ function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
       if (!hasOtherActiveRisk) overall = Math.max(overall, 4.5);
     }
   }
+  // Monotonic guard: adding acne-prone should never make a formula look safer
+  // than the same profile without acne-prone.
+  if (isAcneProne && !skipAcneMonotonicClamp) {
+    const baseProfile = {
+      primary: profile.primary,
+      conditions: profile.conditions.filter(c => c !== 'acne-prone')
+    };
+    const baseResult = analyzeIngredientsForProfile(ingredientsText, baseProfile, { skipAcneMonotonicClamp: true });
+    if (baseResult && Number.isFinite(baseResult.overall)) {
+      acneMonotonicReferenceOverall = Number(baseResult.overall);
+      if (overall > acneMonotonicReferenceOverall) {
+        overall = acneMonotonicReferenceOverall;
+        acneMonotonicClampApplied = true;
+      }
+    }
+  }
   overall = Number(overall.toFixed(1));
 
   return {
@@ -4112,6 +4131,10 @@ function analyzeIngredientsForProfile(ingredientsText, profileInput = {}) {
       applied: unknownPenaltyApplied,
       reason: unknownPenaltyReason,
       amount: Number(unknownPenaltyAmount.toFixed(2))
+    },
+    acneMonotonicClamp: {
+      applied: acneMonotonicClampApplied,
+      referenceOverall: acneMonotonicReferenceOverall
     }
   };
 }

@@ -1028,6 +1028,7 @@ let lastAnalysisData = null;      // gap #4: store last result for re-analysis
 let autoReanalyzeTimer = null;
 let latestSuggestRequestId = 0;
 let activeSuggestAbortController = null;
+let activeAnalysisRequestId = 0;
 let searchState = 'idle';
 let lastSuggestionMeta = null;
 let addProductState = 'add_idle';
@@ -2877,11 +2878,19 @@ function mapBackendCategoryToUi(cat) {
 
 // ── runAnalysis: shared analysis path (text search + photo both end up here) ──
 async function runAnalysis(productName, brand, ingredientsText, source, resultImage = '', resultCategory = '') {
+  const requestId = ++activeAnalysisRequestId;
   try {
     setLoading('Analyzing ingredients…', 'Applying your skin profile');
     await new Promise(r => setTimeout(r, 80));
+    if (requestId !== activeAnalysisRequestId) return;
 
     const analysis = await analyzeIngredientsWithBackend(ingredientsText, skinProfile);
+    if (requestId !== activeAnalysisRequestId) return;
+    if (!analysis) {
+      trackEvent('analysis_backend_unavailable', { source: source || 'unknown', fallback: 'disabled' });
+      showNotFound(productName || 'this product');
+      return;
+    }
     const ingredients = parseIngredients((analysis && analysis.ingredientsTextNormalized) ? analysis.ingredientsTextNormalized : ingredientsText);
     if (!ingredients.length) { showNotFound(productName); return; }
 
@@ -2895,52 +2904,22 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
     let confPct = 1;
     let aiFlags = {};
 
-    if (analysis) {
-      cats = (analysis.categories || []).map(mapBackendCategoryToUi);
-      unknownIngredients = Array.isArray(analysis.unknownIngredients) ? analysis.unknownIngredients : [];
-      overall = Number(analysis.overall || 5);
-      verdict = String(analysis.verdict || verdictFromScore(overall));
-      const confLabelRaw = String(analysis?.confidence?.label || 'high');
-      confLabel = confLabelRaw.charAt(0).toUpperCase() + confLabelRaw.slice(1).toLowerCase();
-      confPct = Number(analysis?.confidence?.pct || 1);
-      aiFlags = {
-        acne: (cats.find(c => c.key === 'acne')?.flagged || []),
-        sensitive: (cats.find(c => c.key === 'reactive')?.flagged || []),
-        dry: (cats.find(c => c.key === 'dry')?.flagged || []),
-        allergens: (cats.find(c => c.key === 'allergen')?.flagged || []),
-        _unknown: unknownIngredients,
-        _matchTypeCounts: analysis.matchTypeCount || {}
-      };
-    } else {
-      // Resilient fallback when backend scorer is temporarily unavailable.
-      trackEvent('analysis_backend_unavailable', { source: source || 'unknown', fallback: 'local' });
-      aiFlags = claudeIngredientCheck(ingredients, skinTypes);
-      unknownIngredients = (aiFlags._unknown || []).filter(u => {
-        if (!u) return false;
-        if (/(read all the geeky details|learn more|click here|ingredients explained|here\s*>>?)/i.test(String(u))) return false;
-        const resolved = resolveIngredient(u);
-        return !resolved?.data;
-      });
-      cats = buildCats(skinTypes, profileMode, aiFlags, skinProfile);
-      const unknownCount = unknownIngredients.length;
-      overall = cats.length ? overallScore(cats, unknownCount, ingredients.length) : 5;
-      const acneProneProfile = (skinProfile.conditions || []).includes('acne-prone');
-      const acneCat = cats.find(c => c.key === 'acne');
-      if (acneProneProfile && acneCat) {
-        overall = Math.max(overall, Number(acneCat.score || 5));
-      }
-      if (acneProneProfile && unknownCount > 0) {
-        const coveragePct = ingredients.length ? (ingredients.length - unknownCount) / ingredients.length : 1;
-        if (coveragePct < 0.75) {
-          const unknownPenalty = Math.min(0.2, unknownCount * 0.05);
-          overall = Math.max(1, Number((overall - unknownPenalty).toFixed(1)));
-        }
-      }
-      verdict = verdictFromScore(overall);
-      const localConfidence = coverageConfidence(ingredients.length, unknownCount);
-      confLabel = localConfidence.label;
-      confPct = localConfidence.pct;
-    }
+    cats = (analysis.categories || []).map(mapBackendCategoryToUi);
+    unknownIngredients = Array.isArray(analysis.unknownIngredients) ? analysis.unknownIngredients : [];
+    overall = Number(analysis.overall || 5);
+    verdict = String(analysis.verdict || verdictFromScore(overall));
+    const confLabelRaw = String(analysis?.confidence?.label || 'high');
+    confLabel = confLabelRaw.charAt(0).toUpperCase() + confLabelRaw.slice(1).toLowerCase();
+    confPct = Number(analysis?.confidence?.pct || 1);
+    aiFlags = {
+      acne: (cats.find(c => c.key === 'acne')?.flagged || []),
+      sensitive: (cats.find(c => c.key === 'reactive')?.flagged || []),
+      dry: (cats.find(c => c.key === 'dry')?.flagged || []),
+      allergens: (cats.find(c => c.key === 'allergen')?.flagged || []),
+      _unknown: unknownIngredients,
+      _matchTypeCounts: analysis.matchTypeCount || {}
+    };
+    if (requestId !== activeAnalysisRequestId) return;
 
     lastAnalysisData = { productName, brand, ingredientsText, source, resultImage, resultCategory };
     logUnknownIngredients(unknownIngredients, source);
@@ -2966,6 +2945,7 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
       el.innerHTML = '<span style="font-size:12px;color:rgba(26,20,16,0.28);font-style:italic">Note unavailable.</span>';
     });
   } catch(err) {
+    if (requestId !== activeAnalysisRequestId) return;
     console.error('[runAnalysis]', err);
     document.getElementById('loading').classList.remove('show');
     document.getElementById('inputSection').style.display = '';
@@ -3359,6 +3339,7 @@ function renderResults({ productName, brand, ingredients, cats, overall, verdict
 }
 
 function resetScan() {
+  activeAnalysisRequestId += 1;
   closeSkinQuiz('reset');
   clearTimeout(autoReanalyzeTimer);
   clearTimeout(searchTimeout);
