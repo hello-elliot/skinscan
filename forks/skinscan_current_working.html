@@ -935,6 +935,7 @@ const RESOLVER_API_FALLBACKS = Array.isArray(window.__SKINSCAN_RESOLVER_API_FALL
   ? window.__SKINSCAN_RESOLVER_API_FALLBACKS
   : [];
 const DEFAULT_RESOLVER_FALLBACKS = ['https://skinscan-resolver-api.onrender.com', 'https://skinscan-3bgp.onrender.com'];
+const ALLOW_LOCAL_ANALYSIS_FALLBACK = true;
 
 // All Anthropic API calls go through the proxy — no key in the client
 function apiUrl()     { return PROXY_URL + '/v1/messages'; }
@@ -2886,7 +2887,7 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
 
     const analysis = await analyzeIngredientsWithBackend(ingredientsText, skinProfile);
     if (requestId !== activeAnalysisRequestId) return;
-    if (!analysis) {
+    if (!analysis && !ALLOW_LOCAL_ANALYSIS_FALLBACK) {
       trackEvent('analysis_backend_unavailable', { source: source || 'unknown', fallback: 'disabled' });
       showNotFound(productName || 'this product');
       return;
@@ -2904,21 +2905,51 @@ async function runAnalysis(productName, brand, ingredientsText, source, resultIm
     let confPct = 1;
     let aiFlags = {};
 
-    cats = (analysis.categories || []).map(mapBackendCategoryToUi);
-    unknownIngredients = Array.isArray(analysis.unknownIngredients) ? analysis.unknownIngredients : [];
-    overall = Number(analysis.overall || 5);
-    verdict = String(analysis.verdict || verdictFromScore(overall));
-    const confLabelRaw = String(analysis?.confidence?.label || 'high');
-    confLabel = confLabelRaw.charAt(0).toUpperCase() + confLabelRaw.slice(1).toLowerCase();
-    confPct = Number(analysis?.confidence?.pct || 1);
-    aiFlags = {
-      acne: (cats.find(c => c.key === 'acne')?.flagged || []),
-      sensitive: (cats.find(c => c.key === 'reactive')?.flagged || []),
-      dry: (cats.find(c => c.key === 'dry')?.flagged || []),
-      allergens: (cats.find(c => c.key === 'allergen')?.flagged || []),
-      _unknown: unknownIngredients,
-      _matchTypeCounts: analysis.matchTypeCount || {}
-    };
+    if (analysis) {
+      cats = (analysis.categories || []).map(mapBackendCategoryToUi);
+      unknownIngredients = Array.isArray(analysis.unknownIngredients) ? analysis.unknownIngredients : [];
+      overall = Number(analysis.overall || 5);
+      verdict = String(analysis.verdict || verdictFromScore(overall));
+      const confLabelRaw = String(analysis?.confidence?.label || 'high');
+      confLabel = confLabelRaw.charAt(0).toUpperCase() + confLabelRaw.slice(1).toLowerCase();
+      confPct = Number(analysis?.confidence?.pct || 1);
+      aiFlags = {
+        acne: (cats.find(c => c.key === 'acne')?.flagged || []),
+        sensitive: (cats.find(c => c.key === 'reactive')?.flagged || []),
+        dry: (cats.find(c => c.key === 'dry')?.flagged || []),
+        allergens: (cats.find(c => c.key === 'allergen')?.flagged || []),
+        _unknown: unknownIngredients,
+        _matchTypeCounts: analysis.matchTypeCount || {}
+      };
+    } else {
+      trackEvent('analysis_backend_unavailable', { source: source || 'unknown', fallback: 'local' });
+      aiFlags = claudeIngredientCheck(ingredients, skinTypes);
+      unknownIngredients = (aiFlags._unknown || []).filter(u => {
+        if (!u) return false;
+        if (/(read all the geeky details|learn more|click here|ingredients explained|here\s*>>?)/i.test(String(u))) return false;
+        const resolved = resolveIngredient(u);
+        return !resolved?.data;
+      });
+      cats = buildCats(skinTypes, profileMode, aiFlags, skinProfile);
+      const unknownCount = unknownIngredients.length;
+      overall = cats.length ? overallScore(cats, unknownCount, ingredients.length) : 5;
+      const acneProneProfile = (skinProfile.conditions || []).includes('acne-prone');
+      const acneCat = cats.find(c => c.key === 'acne');
+      if (acneProneProfile && acneCat) {
+        overall = Math.max(overall, Number(acneCat.score || 5));
+      }
+      if (acneProneProfile && unknownCount > 0) {
+        const coveragePct = ingredients.length ? (ingredients.length - unknownCount) / ingredients.length : 1;
+        if (coveragePct < 0.75) {
+          const unknownPenalty = Math.min(0.2, unknownCount * 0.05);
+          overall = Math.max(1, Number((overall - unknownPenalty).toFixed(1)));
+        }
+      }
+      verdict = verdictFromScore(overall);
+      const localConfidence = coverageConfidence(ingredients.length, unknownCount);
+      confLabel = localConfidence.label;
+      confPct = localConfidence.pct;
+    }
     if (requestId !== activeAnalysisRequestId) return;
 
     lastAnalysisData = { productName, brand, ingredientsText, source, resultImage, resultCategory };
